@@ -1,14 +1,14 @@
 ﻿# ReliefMesh
 
-A FIRSTBLOCK-ATHON reference build inspired by the Swedish Red Cross secure volunteer coordination / trusted messaging case.
+A real AI crisis-coordination reference application for FIRSTBLOCK-ATHON, inspired by the Swedish Red Cross secure volunteer coordination / trusted messaging case.
 
-Intended demonstration: human intent → AI agent → official MCP client → Neuro-Ali STDIO → real Neuro → volunteer → real reply.
+Human intent → AI agent → official MCP TypeScript client → Neuro-Ali STDIO → Neuro → human volunteer → real reply.
 
-“If application code controls Neuro, use Agent API. If your AI agent itself needs to operate Neuro, MCP is the natural interface.”
+**Why MCP?** If application code controls Neuro, use Agent API. If your AI agent itself needs to operate Neuro, MCP is the natural interface.
 
 ## Run
 
-Requires Node 22+, .NET 8, and the existing Neuro-Ali Release DLL.
+Requires Node 22+, .NET 8 and the existing Neuro-Ali Release DLL at `C:\Users\alile\NeuroAli\bin\Release\net8.0\NeuroAli.dll`.
 
 ```powershell
 npm ci
@@ -16,33 +16,32 @@ npm run build
 npm start
 ```
 
-Open http://localhost:4317/setup. The backend owns two independent Neuro-Ali children:
-- A: existing .neuroali-data, port 52482.
-- B: independent .neuroali-data-b, port 52483.
+Open [Coordinator](http://localhost:4317/), [Volunteer](http://localhost:4317/volunteer), or [Setup](http://localhost:4317/setup).
 
-Both directories live under C:\Users\alile\NeuroAli. Stop conflicting Neuro-Ali runtimes before starting. Never share or copy their databases. Do not start a second ReliefMesh backend while this one is running.
+For AI, copy `.env.example` to local `.env`, set `AI_PROVIDER`, `AI_MODEL`, and `OPENAI_API_KEY` (or `AI_API_KEY`). Use a model your standalone API account can access. `openai` uses Responses; `openai-compatible` uses Chat Completions and also requires `AI_BASE_URL`. The SDK does not automatically retry requests. Keys stay on the backend and are never accepted by the UI.
 
-## Current live evidence
+The backend owns two independent Neuro-Ali children: A uses `.neuroali-data` / 52482; B uses `.neuroali-data-b` / 52483, both under `C:\Users\alile\NeuroAli`. Never copy their databases or run conflicting owners. The official MCP client uses default legacy initialization and advertises form and URL elicitation.
 
-- Official @modelcontextprotocol/client 2.0.0, default legacy initialize.
-- Actor A and B each returned 63 real MCP tools.
-- Both contain SendChatMessage, GetMessage, PopMessage, PetitionLegalIdentity.
-- React setup UI receives live status through SSE.
-- Client advertises elicitation.form and elicitation.url and handles elicitation/create.
-- No Neuro operation uses HTTP APIs directly.
+## Real evidence
 
-## Checkpoint / remaining work
+Both actors returned 63 tools. Actor B completed credential onboarding, identity creation, profile photo and ReadyForApproval through this custom MCP client. After manual Lab approval, MCP reported its identity as approved and GetBalance succeeded.
 
-The application is NOT complete. Actor B credential onboarding is awaiting a human action. No new identity or message has been sent. Two-way messaging, identity petition, AI agent, and the coordination/volunteer messaging UI are not yet implemented or proven. /volunteer currently displays the setup surface.
+The single correlated messaging test passed A → B → A using SendChatMessage and GetMessage. `GetMessage(Remove=false)` preserves unrelated messages. The actual proof appears in the technical drawer; the test cannot be automatically repeated.
 
-Use “Connect volunteer to Neuro” to initiate exactly one GetIdentityApplicationProperties call. If prompted, open the exact hosted URL and enter credentials there, never in chat. The original MCP call stays pending in the backend for up to one hour; refreshing the setup page reattaches to its state. Keep the backend running. A backend restart does not preserve in-flight elicitation; runtime credentials themselves belong to Neuro-Ali.
+The AI sees only the real SendChatMessage and GetMessage schemas. The dispatcher limits it to the configured volunteer and known incoming messages; it exposes no payments or identity mutations. The volunteer replies as a human. Incoming messages and conversation text stay in memory and disappear on backend restart; the durable test proof remains. No simulated Neuro results, Agent API calls, or encryption claims.
 
-Activity events retain only actor alias, operation, timestamp, and status. Tool contents and server diagnostics are not logged. Status and elicitation data are memory-only; tool catalogs saved under ignored .runtime contain schemas only. Local HTTP endpoints enforce loopback host/origin and a custom mutation header. This is a local reference build, not a deployed multi-user service.
+## Not complete yet
 
-No claim of verified identity, delivery, petition consent, or end-to-end encryption is made.
+AI-provider configuration and a live AI-driven UI exchange remain required. Identity petition is implemented from confirmed library behavior but is **not yet proven end to end**; consent must be given by the human. Signatures are not implemented. Never interpret identity readiness as cross-party verification.
+
+## Lifecycle and privacy
+
+Open exact elicitation URLs through Setup. Credentials, personal identity data and photos go directly to Neuro-hosted forms. Do not restart while an interaction is pending. Identity creation, photo submission, approval submission and the one-off petition have durable dispatch guards. An uncertain result requires inspection, never an automatic retry.
+
+Use `.runtime` only for local ignored state: safe operation guards, participant addresses, safe identity IDs and proof. No raw tool results, passwords, photos or PII are logged by ReliefMesh. Neuro-Ali owns its separate runtime logging. Do not commit either runtime. This is a loopback-only reference app, not a deployed multi-user service.
+
+To reload while idle, POST `/api/runtime/close` with header `X-ReliefMesh: 1`, then run `npm start`. It refuses active tool calls, elicitation or AI work.
 
 ## Checks
 
-`npm run build` compiles the backend and builds React.
-`npm test` checks the real catalogs saved by the live runtimes, and the security boundary on the running local backend. It does not simulate Neuro results.
-
+`npm run build` type-checks backend and React and builds production assets. `npm test` checks real captured catalogs, live status, request-origin protection, result decoding and distinct JID validation. Tests do not simulate Neuro operation results. See `docs/checkpoint.md` for the current human checkpoint.

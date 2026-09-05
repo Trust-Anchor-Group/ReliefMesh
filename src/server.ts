@@ -1,4 +1,5 @@
 ﻿import express from 'express';
+import { CoordinationAgent } from './agent.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -23,11 +24,15 @@ let onboarding: Onboarding = {};
 try { onboarding=JSON.parse(await readFile('.runtime/onboarding-B.json','utf8')); } catch(error) {
   if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 }
+let trust: {status:string;petitionId?:string;recipientInteraction?:boolean;responseReceived?:boolean}={status:'not-tested'};
+try{trust=JSON.parse(await readFile('.runtime/trust.json','utf8'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+async function saveTrust(){await writeFile('.runtime/trust.json',JSON.stringify(trust));}
 async function saveOnboarding() { await writeFile('.runtime/onboarding-B.json',JSON.stringify(onboarding)); }
 if(onboarding.credentialsConfirmed) readiness.B='XMPP operation succeeded; identity approval not verified';
+if(onboarding.stage==='readiness-confirmed')readiness.B='Post-approval MCP readiness confirmed';
 const operations = new Map<string,{actor:ActorId;name:string;status:string}>();
 function snapshot() {
-  return {onboarding,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  return {onboarding,trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
     pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
@@ -39,6 +44,12 @@ function broadcast() {
 function elicit(actor:ActorId, params:ElicitRequestParams, signal:AbortSignal):Promise<ElicitResult> {
   return new Promise(resolveResult=>{
     const id=randomUUID();
+    if(actor==='B'&&trust.status==='requested'&&params.message.startsWith('A petition for one of your Legal Identities (')&&params.message.includes(onboarding.legalId??'INVALID')){
+      trust.recipientInteraction=true;void saveTrust();
+    }
+    if(actor==='A'&&trust.petitionId&&params.message.startsWith('A Legal Identity you petitioned (Petition ID '+trust.petitionId+') has been successfully returned.')){
+      trust.responseReceived=true;trust.status='identity-returned-awaiting-acknowledgement';void saveTrust();
+    }
     const done=(result:ElicitResult)=>{pending.delete(id);signal.removeEventListener('abort',cancel);resolveResult(result);broadcast();};
     const cancel=()=>done({action:'cancel'});
     pending.set(id,{id,actor,params,resolve:done});
@@ -53,6 +64,7 @@ const actors = {
 };
 const messaging=new Messaging(actors,broadcast);
 await messaging.load();
+const agent=new CoordinationAgent(actors.A,messaging,broadcast);
 const required=['SendChatMessage','GetMessage','PopMessage','PetitionLegalIdentity'];
 for(const actor of Object.values(actors)) actor.on('activity',event=>{
   events.push(event); if(events.length>200) events.shift(); broadcast();
@@ -177,7 +189,7 @@ app.post('/api/actors/B/submit-approval',async (_req,res)=>{
 });
 // Local development reload: refuses to interrupt any MCP call or elicitation.
 app.post('/api/runtime/close',(_req,res)=>{
-  if(pending.size || Object.values(actors).some(a=>a.busy)){res.sendStatus(409);return;}
+  if(agent.busy || pending.size || Object.values(actors).some(a=>a.busy)){res.sendStatus(409);return;}
   res.json({ok:true});void shutdown();
 });
 app.post('/api/actors/:actor/inspect',async(req,res)=>{
@@ -207,6 +219,35 @@ app.post('/api/test/two-way',(_req,res)=>{
   res.status(202).json({status:'starting'});
   void messaging.test().catch(()=>{events.push({actor:'A',operation:'two-way test',status:'already-started-or-blocked',timestamp:new Date().toISOString()});broadcast();});
 });
+app.post('/api/messages/:actor',async(req,res)=>{
+  const actorId=req.params.actor;
+  if(actorId!=='A'&&actorId!=='B'){res.sendStatus(404);return;}
+  if(agent.busy&&actorId==='A'){res.status(409).json({error:'The coordinator agent is working'});return;}
+  try{const success=await messaging.send(actorId,req.body.body,req.body.operationId);res.json({success});}
+  catch{res.status(409).json({error:'Send blocked or uncertain. Check activity before sending again.'});}
+});
+app.post('/api/agent',(_req,res)=>{
+  const prompt=_req.body.prompt;
+  if(typeof prompt!=='string'||!prompt.trim()||prompt.length>10000){res.sendStatus(400);return;}
+  if(!agent.status.configured){res.status(503).json({error:'Configure AI_PROVIDER, AI_MODEL and an API key in the backend environment.'});return;}
+  if(agent.busy){res.status(409).json({error:'The agent is already working'});return;}
+  res.status(202).json({ok:true});void agent.run(prompt).catch(()=>broadcast());
+});
+app.post('/api/trust/petition',async(_req,res)=>{
+  if(!onboarding.legalId||trust.status!=='not-tested'||Object.values(actors).some(a=>a.busy)||pending.size){res.status(409).json({error:'Continue the existing lifecycle'});return;}
+  try{await writeFile('.runtime/petition.once',new Date().toISOString(),{flag:'wx'});}catch{res.status(409).json({error:'Petition already started; do not repeat'});return;}
+  trust.status='requested';await saveTrust();
+  res.status(202).json({ok:true});
+  void (async()=>{
+    // Ensure both identity clients and their recipient-side handlers are registered.
+    await messaging.resources('B');await messaging.resources('A');
+    const result=await actors.A.callTool('PetitionLegalIdentity',{LegalId:onboarding.legalId,Purpose:'ReliefMesh demonstration: please consent to sharing your approved volunteer identity with the crisis coordinator. No shelter location is included.'});
+    const value=neuroResult(result);
+    if(!result.isError&&value.Success===true&&typeof value.PetitionId==='string'){trust.petitionId=value.PetitionId;}
+    else{trust.status='request-not-confirmed';}
+    await saveTrust();broadcast();
+  })().catch(async()=>{trust.status='needs-review';await saveTrust();broadcast();});
+});
 app.use(express.static(resolve('web-dist')));
 app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
 app.use((_err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(400).json({error:'Request failed'}));
@@ -220,7 +261,15 @@ for(const actor of Object.values(actors)) {
   } catch {console.log('ACTOR_'+actor.id+'_MCP=FAIL');}
 }
 broadcast();
+const polling=setInterval(()=>{
+  if(agent.busy || messaging.proof.REAL_TWO_WAY_MCP_MESSAGING!=='PASS')return;
+  for(const id of ['A','B'] as const){
+    if(actors[id].connected&&!actors[id].busy&&![...pending.values()].some(p=>p.actor===id))
+      void messaging.receive(id).then(()=>id==='A'?agent.summarizeNewReplies():undefined).catch(()=>{});
+  }
+},6000);
 let closing=false;
-async function shutdown(){if(closing)return;closing=true;for(const p of pending.values())p.resolve({action:'cancel'});await Promise.allSettled(Object.values(actors).map(a=>a.close()));server.close();process.exit(0);}
+async function shutdown(){if(closing)return;closing=true;clearInterval(polling);for(const p of pending.values())p.resolve({action:'cancel'});await Promise.allSettled(Object.values(actors).map(a=>a.close()));server.close();process.exit(0);}
 process.on('SIGINT',()=>void shutdown());process.on('SIGTERM',()=>void shutdown());
+
 

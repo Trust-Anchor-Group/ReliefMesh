@@ -52,13 +52,13 @@ export class Messaging {
       }
     }finally{this.scanning[id]=false;}
   }
-  async send(id:ActorId,body:string,operationId:string){
+  async send(id:ActorId,body:string,operationId:string,options:{IsMarkdown?:boolean;Language?:string}={}){
     if(!this.network)throw new Error('Participant addresses required');
     if(typeof body!=='string'||body.length<1||body.length>10000)throw new Error('Message must contain 1–10000 characters');
     if(!/^[0-9a-f-]{36}$/i.test(operationId))throw new Error('Valid operation ID required');
     // No automatic retry after an ambiguous send.
     await writeFile('.runtime/send-'+id+'-'+operationId+'.once',new Date().toISOString(),{flag:'wx'});
-    const result=await this.actors[id].callTool('SendChatMessage',{To:this.network[id==='A'?'B':'A'],Message:body,IsMarkdown:false,Language:'en'});
+    const result=await this.actors[id].callTool('SendChatMessage',{To:this.network[id==='A'?'B':'A'],Message:body,IsMarkdown:options.IsMarkdown??false,Language:options.Language??'en'});
     const success=!result.isError&&neuroResult(result).Success===true;
     if(success){this.messages.push({id:operationId,actor:id,direction:'outgoing',body,timestamp:new Date().toISOString()});this.changed();}
     return success;

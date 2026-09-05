@@ -1,13 +1,21 @@
-﻿# Current live checkpoint
+﻿# Live checkpoint
 
-Actor B completed credential onboarding, identity creation, profile photo attachment and ReadyForApproval through Neuro-Ali MCP. Each mutation has a durable dispatch guard. The user reported manual Lab approval. Subsequent MCP resources/list described the same saved LegalId as an Approved Digital Identity, and GetBalance returned Success=true. These are own-identity readiness signals, not cross-party petition verification.
+REAL_TWO_WAY_MCP_MESSAGING=PASS
+A_TO_B_MESSAGE=PASS
+B_RECEIVED=PASS
+B_TO_A_REPLY=PASS
+A_RECEIVED_REPLY=PASS
+ACTOR_A_TOOLS=63
+ACTOR_B_TOOLS=63
 
-Both actors still return 63 tools. Build and seven local checks pass.
+The unique request and reply both correlated on exact body and expected bare JID. Do not rerun the test or remove its dispatch guard.
 
-Messaging implementation uses the real SendChatMessage/GetMessage schemas and mid: message resources. The two-way test sends one unique request and one reply, validates peer address plus exact payload, preserves unrelated messages, and journals sends before dispatch. It has NOT been run: the two bare XMPP participant addresses are needed. Enter them in /setup or supply addresses only in chat. Credentials are never requested in chat.
+Actor B's existing identity lifecycle is complete through Lab approval. MCP resources/list described the saved identity as approved, and GetBalance returned Success=true. The data directories and saved LegalId remain unchanged.
 
-Next: configure the two distinct existing bare JIDs, POST the local /api/test/two-way endpoint once, inspect its actual proof status, then continue UI/agent implementation only after messaging succeeds. No credentials, identity or photo step should be repeated.
+Coordinator, Volunteer and Setup routes are implemented and build/type-check. UI send/reply and AI-driven end-to-end evidence still need a real model and human exchange. No key/model is configured at this checkpoint. Provider adapters support OpenAI Responses and compatible Chat Completions; keys are environment-only. Message polling is non-consuming, and the model only receives SendChatMessage and GetMessage.
 
-The backend remains running on localhost:4317. Future code reloads can use the guarded /api/runtime/close endpoint while idle, then npm start. This gracefully closes both SDK transports and reuses their existing data directories on restart.
+Petition investigation found the full generic path in installed Waher.Mcp.Identity 1.0.1: PetitionLegalIdentity sends via PetitionIdentityAsync and returns PetitionId; incoming PetitionForIdentityReceived elicits hosted consent; recipient consent sends PetitionIdentityResponseAsync; requester PetitionedIdentityResponseReceived elicits hosted acknowledgement and caches the identity after acknowledgement. No Neuro-Ali modification was needed. Live end-to-end petition evidence is still pending. Do not label it PASS based only on successful petition submission.
 
-No petition, signature, or AI claim is proven yet. The project is not complete.
+All sensitive tool results are parsed in memory and excluded from activity logs. Do not print pending petition message contents: these can include identity PII. Read only actor, mode, safe IDs and flags for diagnostics.
+
+Next: one real petition → human B consent → human A acknowledgement → confirm returned resource/correlation. Also obtain a valid AI provider/model/key via the local environment and run a single judged coordinator → volunteer → human reply exchange. The project is not finished.

@@ -1,5 +1,6 @@
 ﻿import { Client, type Tool, type ElicitRequestParams, type ElicitResult } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { neuroResult } from './result.js';
 import { EventEmitter } from 'node:events';
 
 export type ActorId = 'A' | 'B';
@@ -49,7 +50,12 @@ export class NeuroActor extends EventEmitter {
     } while(cursor);
     return tools;
   }
-  async callTool(name: string, args: Record<string, unknown>) {
+  private queue:Promise<unknown>=Promise.resolve();
+  callTool(name:string,args:Record<string,unknown>){
+    const result=this.queue.then(()=>this.executeTool(name,args));
+    this.queue=result.catch(()=>{});return result;
+  }
+  private async executeTool(name: string, args: Record<string, unknown>) {
     if (!this.connected) throw new Error('Actor disconnected');
     if (this.busy) throw new Error('Actor has a pending operation');
     if (!this.tools.some(tool => tool.name === name)) throw new Error('Unknown MCP tool');
@@ -58,7 +64,7 @@ export class NeuroActor extends EventEmitter {
     try {
       const result = await this.client.callTool({name,arguments:args},
         {timeout:3_600_000,maxTotalTimeout:3_600_000});
-      this.activity(name, result.isError ? 'error' : 'returned');
+      this.activity(name, result.isError ? 'error' : neuroResult(result).Success===true?'success':'not-confirmed');
       return result;
     } catch { this.activity(name,'error'); throw new Error('MCP call failed: ' + name); }
     finally { this.busy = undefined; }
