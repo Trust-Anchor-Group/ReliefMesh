@@ -137,6 +137,46 @@ app.post('/api/actors/B/identity',async (_req,res)=>{
     onboarding.stage='creation-needs-review';operations.get(id)!.status='error';await saveOnboarding();
   }).finally(broadcast);
 });
+// Each onboarding mutation is dispatched at most once, including across restarts.
+app.post('/api/actors/B/photo',async (_req,res)=>{
+  const actor=actors.B;
+  if(!actor.connected || actor.busy || onboarding.stage!=='photo-required' || !onboarding.legalId){
+    res.status(409).json({error:'Continue the existing identity application'});return;
+  }
+  try {await writeFile('.runtime/identity-B.photo-once',new Date().toISOString(),{flag:'wx'});}
+  catch {res.status(409).json({error:'Photo interaction already started; continue it without retrying'});return;}
+  onboarding.stage='photo-pending';await saveOnboarding();
+  const id=randomUUID();operations.set(id,{actor:'B',name:'AddPhotoAttachmentElicitation',status:'pending'});
+  res.status(202).json({id});
+  void actor.callTool('AddPhotoAttachmentElicitation',{LegalId:onboarding.legalId,PhotoType:'ProfilePhoto'}).then(async result=>{
+    const value=neuroResult(result);
+    const success=!result.isError && value.Success===true && value.Id===onboarding.legalId;
+    onboarding.stage=success?'ready-to-submit':'photo-needs-review';
+    operations.get(id)!.status=success?'success':'not-confirmed';
+    await saveOnboarding();
+  }).catch(async()=>{onboarding.stage='photo-needs-review';operations.get(id)!.status='error';await saveOnboarding();}).finally(broadcast);
+});
+app.post('/api/actors/B/submit-approval',async (_req,res)=>{
+  const actor=actors.B;
+  if(!actor.connected || actor.busy || onboarding.stage!=='ready-to-submit' || !onboarding.legalId){
+    res.status(409).json({error:'Complete the photo interaction first'});return;
+  }
+  try {await writeFile('.runtime/identity-B.submit-once',new Date().toISOString(),{flag:'wx'});}
+  catch {res.status(409).json({error:'Approval submission already started; do not repeat it'});return;}
+  onboarding.stage='submitting-approval';await saveOnboarding();
+  const id=randomUUID();operations.set(id,{actor:'B',name:'ReadyForApproval',status:'pending'});
+  res.status(202).json({id});
+  void actor.callTool('ReadyForApproval',{LegalId:onboarding.legalId}).then(async result=>{
+    const success=!result.isError && neuroResult(result).Success===true;
+    onboarding.stage=success?'waiting-for-lab-approval':'submission-needs-review';
+    operations.get(id)!.status=success?'success':'not-confirmed';await saveOnboarding();
+  }).catch(async()=>{onboarding.stage='submission-needs-review';operations.get(id)!.status='error';await saveOnboarding();}).finally(broadcast);
+});
+// Local development reload: refuses to interrupt any MCP call or elicitation.
+app.post('/api/runtime/close',(_req,res)=>{
+  if(pending.size || Object.values(actors).some(a=>a.busy)){res.sendStatus(409);return;}
+  res.json({ok:true});void shutdown();
+});
 app.use(express.static(resolve('web-dist')));
 app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
 app.use((_err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(400).json({error:'Request failed'}));
