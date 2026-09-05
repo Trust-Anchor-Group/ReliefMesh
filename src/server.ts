@@ -1,10 +1,11 @@
 ﻿import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Ajv } from 'ajv';
 import type { ElicitRequestParams, ElicitResult } from '@modelcontextprotocol/client';
 import { NeuroActor, type ActorId } from './actor.js';
+import { neuroResult } from './result.js';
 
 const app = express();
 const port = 4317;
@@ -15,9 +16,17 @@ const streams = new Set<express.Response>();
 type Pending = {id:string; actor:ActorId; params:ElicitRequestParams; resolve:(result:ElicitResult)=>void};
 const pending = new Map<string,Pending>();
 const readiness: Record<ActorId,string> = {A:'Not checked',B:'Not checked'};
+type Onboarding = { credentialsConfirmed?:boolean; stage?:string; legalId?:string; identityState?:string };
+await mkdir('.runtime',{recursive:true});
+let onboarding: Onboarding = {};
+try { onboarding=JSON.parse(await readFile('.runtime/onboarding-B.json','utf8')); } catch(error) {
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+}
+async function saveOnboarding() { await writeFile('.runtime/onboarding-B.json',JSON.stringify(onboarding)); }
+if(onboarding.credentialsConfirmed) readiness.B='XMPP operation succeeded; identity approval not verified';
 const operations = new Map<string,{actor:ActorId;name:string;status:string}>();
 function snapshot() {
-  return {actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  return {onboarding,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
     pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
@@ -84,20 +93,49 @@ app.post('/api/elicitation/:id',(req,res)=>{
 app.post('/api/actors/:actor/connect-neuro',(req,res)=>{
   const actor=actors[req.params.actor as ActorId];
   if(!actor) {res.sendStatus(404);return;}
+  if(actor.id==='B' && onboarding.credentialsConfirmed) {res.status(409).json({error:'Credential operation already succeeded; continue identity onboarding'});return;}
   if(actor.busy) {res.status(409).json({error:'Continue the existing interaction'});return;}
   const id=randomUUID();
   operations.set(id,{actor:actor.id,name:'GetIdentityApplicationProperties',status:'pending'});
   res.status(202).json({id});
-  void actor.callTool('GetIdentityApplicationProperties',{}).then(result=>{
+  void actor.callTool('GetIdentityApplicationProperties',{}).then(async result=>{
     // Tool result contents never enter activity logs or browser status.
-    const payload=result.structuredContent ?? result.content.filter(c=>c.type==='text').map(c=>{
-      try{return JSON.parse(c.text);}catch{return null;}
-    }).find(Boolean);
-    const success=!result.isError && (payload?.Success===true || payload?.success===true);
+    const payload=neuroResult(result);
+    const success=!result.isError && payload.Success===true;
     readiness[actor.id]=success?'XMPP operation succeeded; identity approval not verified':'Operation returned; readiness not confirmed';
     operations.get(id)!.status=success?'success':'not-confirmed';
+    if(actor.id==='B' && success){onboarding.credentialsConfirmed=true;await saveOnboarding();}
   }).catch(()=>{operations.get(id)!.status='error';readiness[actor.id]='MCP operation failed';})
     .finally(broadcast);
+});
+// Durable write-before-dispatch guard. Ambiguous or failed creates never retry.
+app.post('/api/actors/B/identity',async (_req,res)=>{
+  const actor=actors.B;
+  if(!actor.connected || actor.busy || !onboarding.credentialsConfirmed) {
+    res.status(409).json({error:'Actor B must be connected, idle and credential-ready'});return;
+  }
+  try {
+    await writeFile('.runtime/identity-B.create-once',new Date().toISOString(),{flag:'wx'});
+  } catch {
+    res.status(409).json({error:'Identity creation already reserved; never retry. Continue the existing application.'});return;
+  }
+  onboarding.stage='creating';
+  await saveOnboarding();
+  const id=randomUUID();
+  operations.set(id,{actor:'B',name:'ApplyForNewPersonalIdentity',status:'pending'});
+  res.status(202).json({id});
+  void actor.callTool('ApplyForNewPersonalIdentity',{}).then(async result=>{
+    const value=neuroResult(result);
+    if(!result.isError && value.Success===true && typeof value.Id==='string' && value.Id.length>0){
+      onboarding.legalId=value.Id;
+      onboarding.identityState=typeof value.State==='string'?value.State:undefined;
+      onboarding.stage='photo-required';
+      operations.get(id)!.status='success';
+    } else {onboarding.stage='creation-needs-review';operations.get(id)!.status='not-confirmed';}
+    await saveOnboarding();
+  }).catch(async ()=>{
+    onboarding.stage='creation-needs-review';operations.get(id)!.status='error';await saveOnboarding();
+  }).finally(broadcast);
 });
 app.use(express.static(resolve('web-dist')));
 app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
