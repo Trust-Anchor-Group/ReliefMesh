@@ -1,0 +1,13 @@
+﻿node_modules/
+dist/
+web-dist/
+.runtime/
+.env
+.env.*
+!.env.example
+.neuroali-data*/
+*.jsonl
+*.log
+*.key
+*.pem
+
