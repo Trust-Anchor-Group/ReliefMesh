@@ -32,7 +32,7 @@ The AI sees only the real SendChatMessage and GetMessage schemas. The dispatcher
 
 ## Not complete yet
 
-AI-provider configuration and a live AI-driven UI exchange remain required. Identity petition is implemented from confirmed library behavior but is **not yet proven end to end**; consent must be given by the human. Signatures are not implemented. Never interpret identity readiness as cross-party verification.
+AI-provider configuration and a live AI-driven UI exchange remain required. Identity petition is **not available in the current demo**: a live attempt exposed missing recipient callback registration in Neuro-Ali. The unproven action is omitted; see docs/petition-investigation.md. Signatures are not implemented. Never interpret identity readiness as cross-party verification.
 
 ## Lifecycle and privacy
 
@@ -45,3 +45,4 @@ To reload while idle, POST `/api/runtime/close` with header `X-ReliefMesh: 1`, t
 ## Checks
 
 `npm run build` type-checks backend and React and builds production assets. `npm test` checks real captured catalogs, live status, request-origin protection, result decoding and distinct JID validation. Tests do not simulate Neuro operation results. See `docs/checkpoint.md` for the current human checkpoint.
+

@@ -28,3 +28,13 @@ test('Mutation without application header blocked',async()=>{
   assert.equal(response.status,403);
 });
 
+test('No-key agent endpoint does not pretend to execute a model',async()=>{
+  const status=await (await fetch('http://localhost:4317/api/status')).json();
+  if(status.agent.configured)return;
+  const response=await fetch('http://localhost:4317/api/agent',{method:'POST',headers:{'Content-Type':'application/json','X-ReliefMesh':'1'},body:JSON.stringify({prompt:'Local configuration check'})});
+  assert.equal(response.status,503);
+});
+test('Unproven petition action is not exposed',async()=>{
+  const response=await fetch('http://localhost:4317/api/trust/petition',{method:'POST',headers:{'X-ReliefMesh':'1'}});
+  assert.equal(response.status,404);
+});

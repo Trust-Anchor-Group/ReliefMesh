@@ -233,21 +233,6 @@ app.post('/api/agent',(_req,res)=>{
   if(agent.busy){res.status(409).json({error:'The agent is already working'});return;}
   res.status(202).json({ok:true});void agent.run(prompt).catch(()=>broadcast());
 });
-app.post('/api/trust/petition',async(_req,res)=>{
-  if(!onboarding.legalId||trust.status!=='not-tested'||Object.values(actors).some(a=>a.busy)||pending.size){res.status(409).json({error:'Continue the existing lifecycle'});return;}
-  try{await writeFile('.runtime/petition.once',new Date().toISOString(),{flag:'wx'});}catch{res.status(409).json({error:'Petition already started; do not repeat'});return;}
-  trust.status='requested';await saveTrust();
-  res.status(202).json({ok:true});
-  void (async()=>{
-    // Ensure both identity clients and their recipient-side handlers are registered.
-    await messaging.resources('B');await messaging.resources('A');
-    const result=await actors.A.callTool('PetitionLegalIdentity',{LegalId:onboarding.legalId,Purpose:'ReliefMesh demonstration: please consent to sharing your approved volunteer identity with the crisis coordinator. No shelter location is included.'});
-    const value=neuroResult(result);
-    if(!result.isError&&value.Success===true&&typeof value.PetitionId==='string'){trust.petitionId=value.PetitionId;}
-    else{trust.status='request-not-confirmed';}
-    await saveTrust();broadcast();
-  })().catch(async()=>{trust.status='needs-review';await saveTrust();broadcast();});
-});
 app.use(express.static(resolve('web-dist')));
 app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
 app.use((_err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(400).json({error:'Request failed'}));
