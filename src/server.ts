@@ -6,6 +6,7 @@ import { Ajv } from 'ajv';
 import type { ElicitRequestParams, ElicitResult } from '@modelcontextprotocol/client';
 import { NeuroActor, type ActorId } from './actor.js';
 import { neuroResult } from './result.js';
+import { Messaging, validateNetwork } from './messaging.js';
 
 const app = express();
 const port = 4317;
@@ -26,7 +27,7 @@ async function saveOnboarding() { await writeFile('.runtime/onboarding-B.json',J
 if(onboarding.credentialsConfirmed) readiness.B='XMPP operation succeeded; identity approval not verified';
 const operations = new Map<string,{actor:ActorId;name:string;status:string}>();
 function snapshot() {
-  return {onboarding,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  return {onboarding,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
     pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
@@ -50,6 +51,8 @@ const actors = {
   A:new NeuroActor('A','C:\\Users\\alile\\NeuroAli\\.neuroali-data',52482,elicit),
   B:new NeuroActor('B','C:\\Users\\alile\\NeuroAli\\.neuroali-data-b',52483,elicit)
 };
+const messaging=new Messaging(actors,broadcast);
+await messaging.load();
 const required=['SendChatMessage','GetMessage','PopMessage','PetitionLegalIdentity'];
 for(const actor of Object.values(actors)) actor.on('activity',event=>{
   events.push(event); if(events.length>200) events.shift(); broadcast();
@@ -176,6 +179,33 @@ app.post('/api/actors/B/submit-approval',async (_req,res)=>{
 app.post('/api/runtime/close',(_req,res)=>{
   if(pending.size || Object.values(actors).some(a=>a.busy)){res.sendStatus(409);return;}
   res.json({ok:true});void shutdown();
+});
+app.post('/api/actors/:actor/inspect',async(req,res)=>{
+  const actor=actors[req.params.actor as ActorId];
+  if(!actor || !actor.connected || actor.busy){res.sendStatus(409);return;}
+  try {
+    if(req.body.kind==='resources') {res.json(await actor.client.listResources());return;}
+    if(req.body.kind==='templates') {res.json(await actor.client.listResourceTemplates());return;}
+    if(req.body.kind==='read' && typeof req.body.uri==='string') {res.json(await actor.client.readResource({uri:req.body.uri}));return;}
+    res.sendStatus(400);
+  }catch{res.status(502).json({error:'MCP read failed'});}
+});
+app.post('/api/actors/B/check-readiness',async(_req,res)=>{
+  const actor=actors.B;
+  if(!actor.connected||actor.busy){res.sendStatus(409);return;}
+  const result=await actor.callTool('GetBalance',{});
+  const success=!result.isError&&neuroResult(result).Success===true;
+  if(success){onboarding.stage='readiness-confirmed';await saveOnboarding();readiness.B='Post-approval MCP readiness confirmed; cross-party verification unproven';}
+  broadcast();res.json({success});
+});
+app.post('/api/network',async(req,res)=>{
+  if(!validateNetwork(req.body)){res.status(400).json({error:'Two distinct bare XMPP addresses required'});return;}
+  try{await messaging.configure(req.body);res.json({ok:true});}catch{res.status(409).json({error:'Participant configuration rejected'});}
+});
+app.post('/api/test/two-way',(_req,res)=>{
+  if(!messaging.network||Object.values(actors).some(a=>!a.connected||a.busy)){res.status(409).json({error:'Both actors must be ready and configured'});return;}
+  res.status(202).json({status:'starting'});
+  void messaging.test().catch(()=>{events.push({actor:'A',operation:'two-way test',status:'already-started-or-blocked',timestamp:new Date().toISOString()});broadcast();});
 });
 app.use(express.static(resolve('web-dist')));
 app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
