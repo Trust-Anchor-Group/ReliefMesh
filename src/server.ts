@@ -49,6 +49,12 @@ function broadcast() {
   for (const response of streams) response.write(data);
 }
 function elicit(actor:ActorId, params:ElicitRequestParams, signal:AbortSignal):Promise<ElicitResult> {
+  // Acknowledge only receipt of the exact mission identity already disclosed by B.
+  // This is not approval of disclosure, a signature, or a payment.
+  const petitionId=mission.state?.petitionId;
+  if(actor==='A'&&petitionId&&params.message.startsWith('A Legal Identity you petitioned (Petition ID '+petitionId+') has been successfully returned.')){
+    return mission.onElicitation(actor,params).then(()=>({action:'accept' as const,content:{}}));
+  }
   return new Promise(resolveResult=>{
     const id=randomUUID();
     void mission.onElicitation(actor,params).catch(()=>{});
@@ -248,6 +254,10 @@ app.post('/api/mission', (req,res)=>{
  if(typeof req.body.prompt!=='string'||!req.body.prompt.trim()||req.body.prompt.length>10000){res.sendStatus(400);return;}
  if(mission.state||mission.busy||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Mission exists or actors are unavailable. Resume the preserved mission.'});return;}
  res.status(202).json({ok:true});void mission.start(req.body.prompt).catch(()=>broadcast());
+});
+app.post('/api/mission/replacement',(_req,res)=>{
+ if(mission.busy||pending.size||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Actors or interaction unavailable'});return;}
+ res.status(202).json({ok:true});void mission.sendPreparedReplacement().catch(()=>broadcast());
 });
 app.post('/api/mission/advance',(_req,res)=>{
  if(!mission.state||mission.busy||pending.size||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Complete the pending human interaction first.'});return;}
