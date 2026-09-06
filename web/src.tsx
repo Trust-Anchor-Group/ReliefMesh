@@ -10,18 +10,20 @@ async function post(path:string,body:unknown={}) {
 }
 const clock=(value:string)=>new Date(value).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 function Mark(){return <svg width="29" height="29" viewBox="0 0 29 29" fill="none" aria-hidden="true"><path d="M5 6h8v8H5zM16 6h8v8h-8zM5 17h8v8H5zM16 17h8v8h-8z" fill="currentColor"/><path d="M12 9h6M9 12v7M20 12v7M12 21h6" stroke="currentColor" strokeWidth="2"/></svg>}
-function Interaction({item,onError}:{item:any;onError:(s:string)=>void}) {
+function Interaction({item,mission,onError}:{item:any;mission:any;onError:(s:string)=>void}) {
   const p=item.params;
   const fields=Object.entries(p.requestedSchema?.properties??{}) as [string,any][];
   const [values,setValues]=useState<Record<string,unknown>>(()=>Object.fromEntries(fields.filter(([,s])=>s.default!==undefined||s.type==='boolean').map(([k,s])=>[k,s.default??false])));
   const [busy,setBusy]=useState(false);
   const unsupported=fields.some(([,s])=>!['string','boolean','number','integer'].includes(s.type)&&!(s.type==='array'&&s.items?.enum));
-  const respond=async(action:string)=>{
+  const proposal=item.actor==='B'&&typeof p.message==='string'&&p.message.includes('contract proposal')&&p.message.includes(mission?.contract?.id??'NO_CONTRACT');
+  const respond=async(action:string,content:Record<string,unknown>=values)=>{
     setBusy(true);
-    try{await post('/api/elicitation/'+item.id,{action,...(p.mode!=='url'?{content:values}:{})});}
+    try{await post('/api/elicitation/'+item.id,{action,...(p.mode!=='url'?{content}:{})});}
     catch(e){onError((e as Error).message);setBusy(false);}
   };
   let safeUrl=false;try{const u=new URL(p.url);safeUrl=u.protocol==='https:' || (u.protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(u.hostname));}catch{}
+  if(proposal)return <section className="action"><span className="eyebrow">YOUR EXPLICIT APPROVAL · ACTOR B</span><h2>Mission agreement ready</h2><p>{mission.request}</p><p>Role: <strong>Volunteer</strong></p><p>Signatures confirmed by resource: {mission.contract.signatures?.map((signature:any)=>signature.actor+' as '+signature.role).join(', ')||'None'}</p><p className="url">{mission.contract.id}</p><div className="buttons"><button disabled={busy} onClick={()=>respond('accept',{Accept:true})}>Sign as Volunteer</button><button className="secondary" disabled={busy} onClick={()=>respond('cancel')}>Cancel</button></div></section>;
   return <section className="action"><span className="eyebrow">ACTION REQUIRED · ACTOR {item.actor}</span><h2>Continue the secure interaction</h2><p className="preline">{p.message}</p>
     {p.mode==='url'?<><p>Complete this request in Neuro’s hosted form. Keep ReliefMesh running.</p>
       <p className="url">{p.url}</p>{safeUrl?<a className="button" href={p.url} target="_blank" rel="noreferrer">Open secure Neuro form ↗</a>:<p>Unsupported URL. Cancel this request.</p>}
@@ -62,7 +64,7 @@ function App(){
       {error&&<p role="alert" className="error">{error}</p>}
       {!live&&<p role="status" className="notice">Connecting to ReliefMesh. Actions are unavailable until the live connection returns.</p>}
       {live&&state&&!actorsReady&&<p role="status" className="notice">Waiting for both Neuro-Ali connections. If a session has failed, restart the idle ReliefMesh runtime before continuing.</p>}
-      {state?.pending.filter((p:any)=>setup||p.actor===show).map((item:any)=><Interaction key={item.id} item={item} onError={setError}/>)}
+      {state?.pending.filter((p:any)=>setup||p.actor===show).map((item:any)=><Interaction key={item.id} item={item} mission={state?.mission} onError={setError}/>)}
       {!setup&&<MissionView mission={state?.mission} ready={live&&actorsReady&&!state?.pending?.length} volunteer={volunteer} act={act}/>}
       {setup?<><div className="actors">{state?.actors.map((actor:any)=><section key={actor.id}><span className="eyebrow">ACTOR {actor.id}</span><h2>{actor.id==='A'?'Crisis Coordinator':'Solna Volunteer'}</h2><dl><dt>MCP</dt><dd>{actor.connected?'Connected':'Disconnected'}</dd><dt>Joined catalog</dt><dd>{actor.tools} tools</dd><dt>Required tools</dt><dd>{actor.requiredTools?'Present':'Not confirmed'}</dd><dt>Readiness</dt><dd>{actor.readiness}</dd></dl>{actor.busy&&<p role="status">In progress: {actor.busy}</p>}</section>)}</div>
       <section><span className="eyebrow">ACTOR B / SAME IDENTITY</span><h2>Volunteer onboarding</h2><p>Status: {state?.onboarding?.stage??'Credentials required'}</p>{state?.onboarding?.legalId&&<p className="url">LegalId: {state.onboarding.legalId}</p>}

@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<contract
+    archiveOpt="P30D"
+    archiveReq="P30D"
+    canActAsTemplate="true"
+    duration="P30D"
+    visibility="Public"
+    xmlns="urn:nf:iot:leg:sc:1.0">
+
+  <Nop xmlns="https://paiwise.tagroot.io/Schema/PaymentInstructions.xsd" />
+
+  <role minCount="1" maxCount="1" name="Coordinator">
+    <description xml:lang="en">
+      <paragraph>
+        <text>The coordinator responsible for authorizing the humanitarian mission and its reimbursement terms.</text>
+      </paragraph>
+    </description>
+  </role>
+
+  <role minCount="1" maxCount="1" name="Volunteer">
+    <description xml:lang="en">
+      <paragraph>
+        <text>The volunteer accepting responsibility for carrying out the humanitarian mission.</text>
+      </paragraph>
+    </description>
+  </role>
+
+  <parts>
+    <templateOnly />
+  </parts>
+
+  <parameters>
+
+    <stringParameter name="MissionId">
+      <description xml:lang="en">
+        <paragraph>
+          <text>Unique ReliefMesh mission identifier.</text>
+        </paragraph>
+      </description>
+    </stringParameter>
+
+    <stringParameter name="MissionTitle">
+      <description xml:lang="en">
+        <paragraph>
+          <text>Human-readable title of the mission.</text>
+        </paragraph>
+      </description>
+    </stringParameter>
+
+    <stringParameter name="Item">
+      <description xml:lang="en">
+        <paragraph>
+          <text>The item or supply to be delivered.</text>
+        </paragraph>
+      </description>
+    </stringParameter>
+
+    <numericalParameter
+        name="Quantity"
+        min="1"
+        minIncluded="true">
+      <description xml:lang="en">
+        <paragraph>
+          <text>Quantity of items included in the mission.</text>
+        </paragraph>
+      </description>
+    </numericalParameter>
+
+    <stringParameter name="Destination">
+      <description xml:lang="en">
+        <paragraph>
+          <text>Non-sensitive destination or mission area.</text>
+        </paragraph>
+      </description>
+    </stringParameter>
+
+    <dateTimeParameter name="Deadline">
+      <description xml:lang="en">
+        <paragraph>
+          <text>Deadline for the mission.</text>
+        </paragraph>
+      </description>
+    </dateTimeParameter>
+
+    <numericalParameter
+        name="Reimbursement"
+        min="0"
+        minIncluded="true">
+      <description xml:lang="en">
+        <paragraph>
+          <text>Maximum agreed transport reimbursement.</text>
+        </paragraph>
+      </description>
+    </numericalParameter>
+
+    <stringParameter name="Currency">
+      <description xml:lang="en">
+        <paragraph>
+          <text>Currency used for reimbursement.</text>
+        </paragraph>
+      </description>
+    </stringParameter>
+
+  </parameters>
+
+  <humanReadableText xml:lang="en">
+    <section>
+      <header>
+        <text>ReliefMesh Mission Assignment</text>
+      </header>
+
+      <body>
+
+        <paragraph>
+          <text>The Coordinator assigns the following humanitarian mission to the Volunteer.</text>
+        </paragraph>
+
+        <paragraph>
+          <text>Mission ID: </text>
+          <parameter name="MissionId" />
+        </paragraph>
+
+        <paragraph>
+          <text>Mission: </text>
+          <parameter name="MissionTitle" />
+        </paragraph>
+
+        <paragraph>
+          <text>Item: </text>
+          <parameter name="Item" />
+        </paragraph>
+
+        <paragraph>
+          <text>Quantity: </text>
+          <parameter name="Quantity" />
+        </paragraph>
+
+        <paragraph>
+          <text>Destination: </text>
+          <parameter name="Destination" />
+        </paragraph>
+
+        <paragraph>
+          <text>Deadline: </text>
+          <parameter name="Deadline" />
+        </paragraph>
+
+        <paragraph>
+          <text>Reimbursement: </text>
+          <parameter name="Reimbursement" />
+          <text> </text>
+          <parameter name="Currency" />
+        </paragraph>
+
+        <paragraph>
+          <text>By signing as Coordinator, the Coordinator authorizes this mission and the reimbursement terms stated above.</text>
+        </paragraph>
+
+        <paragraph>
+          <text>By signing as Volunteer, the Volunteer accepts the mission under these terms.</text>
+        </paragraph>
+
+      </body>
+    </section>
+  </humanReadableText>
+
+</contract>

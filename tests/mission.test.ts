@@ -13,6 +13,7 @@ test('Payment evidence rejects pending, wrong-recipient, or unchanged-wallet res
  const v={Success:true,Id:'predicate-fixture',Processed:'2026-09-06T10:00:00Z',Amount:0.01,Currency:'TST',To:'test-volunteer'};
  const check=(result:Record<string,unknown>,after={A:0.99,B:0.01})=>paymentEvidence(result,0.01,'TST',['test-volunteer'],{A:1,B:0},after);
  assert.equal(check(v),true);
+ assert.equal(check({...v,Processed:1788724596}),true);
  assert.equal(check({...v,Processed:null}),false);
  assert.equal(check({...v,To:'unrelated-recipient'}),false);
  assert.equal(check({...v,Amount:1}),false);

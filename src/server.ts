@@ -208,13 +208,44 @@ app.post('/api/runtime/close',(_req,res)=>{
   if(mission.busy || agent.busy || pending.size || Object.values(actors).some(a=>a.busy)){res.sendStatus(409);return;}
   res.json({ok:true});void shutdown();
 });
+app.post('/api/mission/recover-volunteer-proposal',(_req,res)=>{
+  if(mission.busy||pending.size||Object.values(actors).some(actor=>!actor.connected||actor.busy)){res.sendStatus(409);return;}
+  res.status(202).json({status:'starting'});
+  void mission.recoverVolunteerProposal().catch(()=>broadcast());
+});
+app.post('/api/mission/continue-approved-volunteer-signature',(_req,res)=>{
+  if(mission.busy||pending.size||Object.values(actors).some(actor=>!actor.connected||actor.busy)){res.sendStatus(409);return;}
+  res.status(202).json({status:'starting'});
+  void mission.continueApprovedVolunteerSignature().catch(()=>broadcast());
+});
+app.post('/api/mission/fund-and-prepare-payment',(_req,res)=>{
+  if(mission.busy||pending.size||Object.values(actors).some(actor=>!actor.connected||actor.busy)){res.sendStatus(409);return;}
+  res.status(202).json({status:'starting'});
+  void mission.fundAndPreparePayment().catch(()=>broadcast());
+});
+app.post('/api/mission/claim-operator-funding',(req,res)=>{
+  if(typeof req.body.uri!=='string'||mission.busy||pending.size||Object.values(actors).some(actor=>!actor.connected||actor.busy)){res.sendStatus(409);return;}
+  const uri=req.body.uri;
+  res.status(202).json({status:'starting'});
+  void mission.claimOperatorFundingAndPrepare(uri).catch(()=>broadcast());
+});
+app.post('/api/mission/reconcile-confirmed-payment',(_req,res)=>{
+  if(mission.busy||pending.size||Object.values(actors).some(actor=>!actor.connected||actor.busy)){res.sendStatus(409);return;}
+  res.status(202).json({status:'starting'});
+  void mission.reconcileConfirmedConditionalPayment().catch(()=>broadcast());
+});
 app.post('/api/actors/:actor/inspect',async(req,res)=>{
   const actor=actors[req.params.actor as ActorId];
   if(!actor || !actor.connected || actor.busy){res.sendStatus(409);return;}
   try {
     if(req.body.kind==='resources') {res.json(await actor.client.listResources());return;}
     if(req.body.kind==='templates') {res.json(await actor.client.listResourceTemplates());return;}
-    if(req.body.kind==='read' && typeof req.body.uri==='string') {res.json(await actor.client.readResource({uri:req.body.uri}));return;}
+    if(req.body.kind==='read' && typeof req.body.uri==='string') {res.json(await actor.readResource(req.body.uri));return;}
+    if(req.params.actor==='A'&&req.body.kind==='balance') {res.json(neuroResult(await actor.callTool('GetBalance',{})));return;}
+    if(req.params.actor==='A'&&req.body.kind==='fundingProviders') {res.json(neuroResult(await actor.callTool('GetServiceProvidersForBuyingEDaler',{})));return;}
+    if(req.params.actor==='A'&&req.body.kind==='fundingOptions'&&typeof req.body.id==='string'&&typeof req.body.type==='string') {
+      res.json(neuroResult(await actor.callTool('GetBuyEDalerOptions',{Id:req.body.id,Type:req.body.type})));return;
+    }
     res.sendStatus(400);
   }catch{res.status(502).json({error:'MCP read failed'});}
 });
@@ -255,6 +286,13 @@ app.post('/api/mission', (req,res)=>{
  if(mission.state||mission.busy||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Mission exists or actors are unavailable. Resume the preserved mission.'});return;}
  res.status(202).json({ok:true});void mission.start(req.body.prompt).catch(()=>broadcast());
 });
+app.post('/api/mission/template',async(req,res)=>{
+ if(typeof req.body.templateId!=='string'){res.sendStatus(400);return;}
+ try{res.json(await mission.verifyTemplate(req.body.templateId));}catch{res.status(409).json({error:'Authoritative template verification failed; no template or contract was created.'});}
+});
+app.post('/api/mission/contract',async(_req,res)=>{
+ try{res.json(await mission.createMissionContract());}catch{res.status(409).json({error:'Contract creation unavailable or uncertain. Preserved state was not retried.'});}
+});
 app.post('/api/mission/replacement',(_req,res)=>{
  if(mission.busy||pending.size||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Actors or interaction unavailable'});return;}
  res.status(202).json({ok:true});void mission.sendPreparedReplacement().catch(()=>broadcast());
@@ -266,6 +304,9 @@ app.post('/api/mission/advance',(_req,res)=>{
 app.post('/api/mission/approval/:id',async(req,res)=>{
  if(typeof req.body.accept!=='boolean'){res.sendStatus(400);return;}
  try{await mission.approve(req.params.id,req.body.accept);res.json({ok:true});}catch{res.status(409).json({error:'Approval unavailable or uncertain. State preserved.'});}
+});
+app.post('/api/mission/approval/:id/reset-never-sent',async(req,res)=>{
+ try{await mission.resetNeverSentSignApproval(req.params.id);res.json({ok:true});}catch{res.status(409).json({error:'Never-sent approval recovery rejected.'});}
 });
 app.use(express.static(resolve('web-dist')));
 app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));

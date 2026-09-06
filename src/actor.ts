@@ -28,6 +28,11 @@ export class NeuroActor extends EventEmitter {
     this.transport = new StdioClientTransport({command:'dotnet',
       args:['C:\\Users\\alile\\NeuroAli\\bin\\Release\\net8.0\\NeuroAli.dll','-d',this.dataDir,'-p',String(this.port)],
       stderr:'pipe'});
+    const send=this.transport.send.bind(this.transport);
+    this.transport.send=(message)=>{
+      if('method' in message&&message.method==='tools/call')this.activity('SIGN_TRACE_STDIO_SEND',String(message.params?.name??'unknown'));
+      return send(message);
+    };
     // Drain diagnostics without retaining potentially sensitive server output.
     this.transport.stderr?.on('data', () => {});
     try {
@@ -61,7 +66,8 @@ export class NeuroActor extends EventEmitter {
   async unsubscribeResource(uri:string){await this.client.unsubscribeResource({uri});this.activity('resources/unsubscribe','success');}
   private queue:Promise<unknown>=Promise.resolve();
   callTool(name:string,args:Record<string,unknown>){
-    const result=this.queue.then(()=>this.executeTool(name,args));
+    this.activity('SIGN_TRACE_ACTOR_CALL_ENTER',name);
+    const result=this.queue.then(()=>{this.activity('SIGN_TRACE_QUEUE_ACQUIRED',name);return this.executeTool(name,args);});
     this.queue=result.catch(()=>{});return result;
   }
   private async executeTool(name: string, args: Record<string, unknown>) {
@@ -71,8 +77,10 @@ export class NeuroActor extends EventEmitter {
     this.busy = name;
     this.activity(name, 'pending');
     try {
+      const toolDefinition=this.tools.find(tool=>tool.name===name);
+      this.activity('SIGN_TRACE_CLIENT_CALL_ENTER',name);
       const result = await this.client.callTool({name,arguments:args},
-        {timeout:3_600_000,maxTotalTimeout:3_600_000});
+        {timeout:3_600_000,maxTotalTimeout:3_600_000,toolDefinition});
       this.activity(name, result.isError ? 'error' : neuroResult(result).Success===true?'success':'not-confirmed');
       return result;
     } catch { this.activity(name,'error'); throw new Error('MCP call failed: ' + name); }

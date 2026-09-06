@@ -1,0 +1,88 @@
+<?xml version='1.0' encoding='utf-8'?>
+<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'
+		   targetNamespace='https://paiwise.tagroot.io/Schema/PaymentInstructions.xsd'
+		   xmlns='https://paiwise.tagroot.io/Schema/PaymentInstructions.xsd'
+		   elementFormDefault='qualified'>
+
+	<xs:element name='PaymentInstructions'>
+		<xs:complexType>
+			<xs:choice minOccurs='1' maxOccurs='unbounded'>
+				<xs:element ref='Payment'/>
+			</xs:choice>
+		</xs:complexType>
+	</xs:element>
+
+	<xs:element name='Nop'>
+		<xs:complexType>
+			<xs:attribute name='comment' type='xs:string' use='optional'/>
+		</xs:complexType>
+	</xs:element>
+
+	<xs:element name='BuyEDaler'>
+		<xs:complexType>
+			<xs:sequence>
+				<xs:element name='Amount' type='Value'/>
+				<xs:element name='Currency' type='Value'/>
+			</xs:sequence>
+			<xs:attribute name='serviceProvider' type='xs:string' use='required'/>
+			<xs:attribute name='serviceId' type='xs:string' use='required'/>
+		</xs:complexType>
+	</xs:element>
+
+	<xs:element name='SellEDaler'>
+		<xs:complexType>
+			<xs:sequence>
+				<xs:element name='Amount' type='Value'/>
+				<xs:element name='Currency' type='Value'/>
+			</xs:sequence>
+			<xs:attribute name='serviceProvider' type='xs:string' use='required'/>
+			<xs:attribute name='serviceId' type='xs:string' use='required'/>
+		</xs:complexType>
+	</xs:element>
+
+	<xs:element name='Payment'>
+		<xs:complexType>
+			<xs:sequence>
+				<xs:element name='From' type='Part'/>
+				<xs:element name='To' type='Part'/>
+				<xs:element name='Amount' type='Value'/>
+				<xs:element name='AmountExtra' type='Value' minOccurs='0'/>
+				<xs:element name='Currency' type='Value'/>
+				<xs:element name='ValidDays' type='Value'/>
+				<xs:element name='Reference' type='Value'/>
+				<xs:element name='Condition' type='Value' minOccurs='0'/>
+			</xs:sequence>
+		</xs:complexType>
+	</xs:element>
+
+	<xs:complexType name='Part'>
+		<xs:choice>
+			<xs:element name='RoleReference' type='RoleReference'/>
+		</xs:choice>
+	</xs:complexType>
+
+	<xs:complexType name='RoleReference'>
+		<xs:attribute name='role' type='xs:string' use='required'/>
+	</xs:complexType>
+
+	<xs:complexType name='Value'>
+		<xs:choice>
+			<xs:element name='ParameterReference' type='ParameterReference'/>
+			<xs:element name='Expression' type='xs:string'/>
+			<xs:element name='ContractID'/>
+			<xs:element name='String' type='xs:string'/>
+			<xs:element name='Number' type='xs:decimal'/>
+			<xs:element name='Boolean' type='xs:boolean'/>
+			<xs:element name='Uri' type='xs:anyURI'/>
+			<xs:element name='Binary' type='xs:base64Binary'/>
+			<xs:element name='Date' type='xs:date'/>
+			<xs:element name='DateTime' type='xs:dateTime'/>
+			<xs:element name='Time' type='xs:time'/>
+		</xs:choice>
+	</xs:complexType>
+
+	<xs:complexType name='ParameterReference'>
+		<xs:attribute name='parameter' type='xs:string' use='required'/>
+	</xs:complexType>
+
+</xs:schema>
