@@ -1,3 +1,9 @@
+# ReliefMesh - Trusted Mission Execution
+
+The AI plans. MCP connects. Humans authorize. Neuro enforces.
+
+ReliefMesh is being extended from its proven real messaging demo into mission execution through bounded Neuro MCP capabilities. Identity disclosure, legal signatures and money movement stay under human authority. The intended full workflow includes a real agreement and contract-bound test reimbursement; those new stages are not yet live-certified. See [current checkpoint](docs/dev/current-checkpoint.md) and run `npm run certify` for truthful runtime status.
+
 ﻿# ReliefMesh
 
 A real AI crisis-coordination reference application for FIRSTBLOCK-ATHON, inspired by the Swedish Red Cross secure volunteer coordination / trusted messaging case.

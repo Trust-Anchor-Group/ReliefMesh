@@ -50,6 +50,15 @@ export class NeuroActor extends EventEmitter {
     } while(cursor);
     return tools;
   }
+  async listResources() {
+    const resources=[];let cursor:string|undefined;const seen=new Set<string>();
+    do {const page=await this.client.listResources(cursor?{cursor}:undefined);resources.push(...page.resources);cursor=page.nextCursor;
+      if(cursor&&seen.has(cursor))throw new Error('Repeated resource cursor');if(cursor)seen.add(cursor);
+    }while(cursor);return resources;
+  }
+  async readResource(uri:string){const result=await this.client.readResource({uri,_meta:{'reliefmesh/format':'json'}});this.activity('resources/read','success');return result;}
+  async subscribeResource(uri:string){await this.client.subscribeResource({uri});this.activity('resources/subscribe','success');}
+  async unsubscribeResource(uri:string){await this.client.unsubscribeResource({uri});this.activity('resources/unsubscribe','success');}
   private queue:Promise<unknown>=Promise.resolve();
   callTool(name:string,args:Record<string,unknown>){
     const result=this.queue.then(()=>this.executeTool(name,args));

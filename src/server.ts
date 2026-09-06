@@ -1,4 +1,5 @@
 ﻿import express from 'express';
+import {Mission} from './mission.js';
 import { CoordinationAgent } from './agent.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
@@ -31,10 +32,16 @@ async function saveOnboarding() { await writeFile('.runtime/onboarding-B.json',J
 if(onboarding.credentialsConfirmed) readiness.B='XMPP operation succeeded; identity approval not verified';
 if(onboarding.stage==='readiness-confirmed')readiness.B='Post-approval MCP readiness confirmed';
 const operations = new Map<string,{actor:ActorId;name:string;status:string}>();
+function safeInteraction(params:ElicitRequestParams):ElicitRequestParams {
+ let message=params.message;
+ if(message.startsWith('A petition for one of your Legal Identities ('))message='ReliefMesh Crisis Coordination is requesting access to your verified identity for this assignment. Review the secure form and choose whether to disclose your identity.';
+ else if(message.startsWith('A Legal Identity you petitioned ('))message='The requested identity response has arrived through Neuro. Acknowledge the secure response to complete the trust check.';
+ return {...params,message};
+}
 function snapshot() {
-  return {onboarding,trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  return {mission:mission.snapshot,onboarding,trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
-    pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params})),
+    pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params:safeInteraction(params)})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
 }
 function broadcast() {
@@ -44,6 +51,7 @@ function broadcast() {
 function elicit(actor:ActorId, params:ElicitRequestParams, signal:AbortSignal):Promise<ElicitResult> {
   return new Promise(resolveResult=>{
     const id=randomUUID();
+    void mission.onElicitation(actor,params).catch(()=>{});
     if(actor==='B'&&trust.status==='requested'&&params.message.startsWith('A petition for one of your Legal Identities (')&&params.message.includes(onboarding.legalId??'INVALID')){
       trust.recipientInteraction=true;void saveTrust();
     }
@@ -65,6 +73,8 @@ const actors = {
 const messaging=new Messaging(actors,broadcast);
 await messaging.load();
 const agent=new CoordinationAgent(actors.A,messaging,broadcast);
+const mission=new Mission(actors,messaging,broadcast);
+await mission.load();
 const required=['SendChatMessage','GetMessage','PopMessage','PetitionLegalIdentity'];
 for(const actor of Object.values(actors)) actor.on('activity',event=>{
   events.push(event); if(events.length>200) events.shift(); broadcast();
@@ -189,7 +199,7 @@ app.post('/api/actors/B/submit-approval',async (_req,res)=>{
 });
 // Local development reload: refuses to interrupt any MCP call or elicitation.
 app.post('/api/runtime/close',(_req,res)=>{
-  if(agent.busy || pending.size || Object.values(actors).some(a=>a.busy)){res.sendStatus(409);return;}
+  if(mission.busy || agent.busy || pending.size || Object.values(actors).some(a=>a.busy)){res.sendStatus(409);return;}
   res.json({ok:true});void shutdown();
 });
 app.post('/api/actors/:actor/inspect',async(req,res)=>{
@@ -234,6 +244,19 @@ app.post('/api/agent',(_req,res)=>{
   if(agent.busy){res.status(409).json({error:'The agent is already working'});return;}
   res.status(202).json({ok:true});void agent.run(prompt).catch(()=>broadcast());
 });
+app.post('/api/mission', (req,res)=>{
+ if(typeof req.body.prompt!=='string'||!req.body.prompt.trim()||req.body.prompt.length>10000){res.sendStatus(400);return;}
+ if(mission.state||mission.busy||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Mission exists or actors are unavailable. Resume the preserved mission.'});return;}
+ res.status(202).json({ok:true});void mission.start(req.body.prompt).catch(()=>broadcast());
+});
+app.post('/api/mission/advance',(_req,res)=>{
+ if(!mission.state||mission.busy||pending.size||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Complete the pending human interaction first.'});return;}
+ res.status(202).json({ok:true});void mission.advance().catch(()=>broadcast());
+});
+app.post('/api/mission/approval/:id',async(req,res)=>{
+ if(typeof req.body.accept!=='boolean'){res.sendStatus(400);return;}
+ try{await mission.approve(req.params.id,req.body.accept);res.json({ok:true});}catch{res.status(409).json({error:'Approval unavailable or uncertain. State preserved.'});}
+});
 app.use(express.static(resolve('web-dist')));
 app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
 app.use((_err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(400).json({error:'Request failed'}));
@@ -248,10 +271,10 @@ for(const actor of Object.values(actors)) {
 }
 broadcast();
 const polling=setInterval(()=>{
-  if(agent.busy || !messaging.network)return;
+  if(agent.busy || mission.busy || !messaging.network)return;
   for(const id of ['A','B'] as const){
     if(actors[id].connected&&!actors[id].busy&&![...pending.values()].some(p=>p.actor===id))
-      void messaging.receive(id).then(()=>id==='A'?agent.summarizeNewReplies():undefined).catch(()=>{});
+      void messaging.receive(id).then(()=>id==='A'?(mission.state?mission.tick():agent.summarizeNewReplies()):undefined).catch(()=>{});
   }
 },6000);
 let closing=false;
