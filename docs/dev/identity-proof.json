@@ -1,0 +1,16 @@
+{
+  "missionId": "RM-mtpmo2sq",
+  "petitionId": "4026af67-2190-498e-a9a9-8ca1dd601d4b",
+  "verifiedAt": "2026-09-06T16:06:52.416Z",
+  "IDENTITY_RESULT_RECEIVED": "YES",
+  "IDENTITY_RECEIPT_ACK": "PASS",
+  "IDENTITY_TRUST": "PASS",
+  "IDENTITY_TRUST_MODE": "PETITION_CONSENT",
+  "QUICK_RESPONSE": "PASS",
+  "ADDITIONAL_PETITIONS_SENT": 0,
+  "receiptMechanism": "Automated coordinator-only hosted MCP receipt form; no human disclosure decision automated",
+  "verification": "Actor A MCP resource read returned Actor B Approved identity; subsequent PetitionLegalIdentity returned QuickResponse",
+  "replyMessageId": "mid:p63pzsHWlKYQi9WvlnVx5g",
+  "CONTRACT_TEMPLATE": "UNAVAILABLE",
+  "DEMO_READY": "NOT_CERTIFIED"
+}
