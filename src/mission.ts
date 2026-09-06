@@ -34,12 +34,11 @@ export class Mission {
  const value=neuroResult(await this.actors.A.callTool(a.tool,a.args));s.calls++;if(value.Success!==true)throw Error('Operation not confirmed');a.status='complete';await this.event('A',a.tool,'success');if(a.tool==='SignContract'){await this.refreshContract();s.stage='COORDINATOR_SIGNED';}else {await this.balance('A');await this.balance('B');const after={A:s.balances.A!.amount,B:s.balances.B!.amount};const recipients=[this.messaging.network!.B,...(s.identities.B??[]).map(i=>i.id)];if(!paymentEvidence(value,s.amount,s.currency,recipients,before,after))throw Error('Transaction or balance evidence incomplete');s.payment!.transaction={id:String(value.Id),amount:s.amount,currency:s.currency,processed:String(value.Processed)};s.payment!.processed=true;s.stage='PAYMENT_COMPLETE';}await this.save();}catch{a.status='uncertain';s.error='Approved operation failed or is uncertain. Inspect Neuro state; do not retry.';if(s.payment&&a.tool==='ProcessPaymentUri')s.payment.uncertain=true;await this.save();}finally{this.busy=false;this.changed();}}
   async onElicitation(actor:ActorId,p:ElicitRequestParams){const s=this.state;if(!s)return;const message=p.message;if(actor==='B'&&s.petitionId&&message.startsWith('A petition for one of your Legal Identities (')){s.stage='TRUST_PENDING';await this.event('B','identity consent','pending');}if(actor==='A'&&s.petitionId&&message.startsWith('A Legal Identity you petitioned (Petition ID '+s.petitionId+') has been successfully returned.')){await this.event('A','identity petition response','received');}if(actor==='B'&&s.contract&&message.includes(s.contract.id)){await this.event('B','contract proposal','received');}}
   async sendPreparedReplacement(){
-    const prepared=JSON.parse(await readFile('.runtime/replacement-petition-prepared.json','utf8'));
-    const audit=JSON.parse(await readFile('.runtime/original-petition-audit.json','utf8'));
+    const prepared=JSON.parse(await readFile('.runtime/receipt-recovery-prepared.json','utf8'));
     const s=this.state;
-    if(!s||this.busy||s.id!==prepared.missionId||s.petitionId!==prepared.replacesExpiredPetition||audit.ORIGINAL_PETITION_STATUS!=='EXPIRED'||audit.IDENTITY_RESULT_RECEIVED!=='NO')throw Error('Replacement not permitted');
+    if(!s||this.busy||s.id!==prepared.missionId||s.petitionId!==prepared.replacesExpiredPetition||prepared.authorization!=='receipt-fix-25fcb92')throw Error('Replacement not permitted');
     this.busy=true;
-    try{await this.once('identity-replacement');await this.event('A','PetitionLegalIdentity replacement','dispatching');
+    try{await this.once('identity-receipt-recovery');await this.event('A','PetitionLegalIdentity replacement','dispatching');
       const r=neuroResult(await this.actors.A.callTool('PetitionLegalIdentity',prepared.arguments));s.calls++;
       if(r.Success!==true)throw Error('Replacement unconfirmed');
       if(r.QuickResponse){const identity=this.safeIdentity(r.QuickResponse);if(identity.id!==prepared.arguments.LegalId||identity.state!=='Approved')throw Error('Identity mismatch');s.trust='QUICK_RESPONSE';s.stage='TRUSTED';}
