@@ -230,6 +230,7 @@ app.post('/api/agent',(_req,res)=>{
   const prompt=_req.body.prompt;
   if(typeof prompt!=='string'||!prompt.trim()||prompt.length>10000){res.sendStatus(400);return;}
   if(!agent.status.configured){res.status(503).json({error:'Configure AI_PROVIDER, AI_MODEL and an API key in the backend environment.'});return;}
+  if(Object.values(actors).some(a=>!a.connected)||!messaging.network){res.status(503).json({error:'Both MCP actors must be connected. Restart the idle ReliefMesh runtime if a session has failed.'});return;}
   if(agent.busy){res.status(409).json({error:'The agent is already working'});return;}
   res.status(202).json({ok:true});void agent.run(prompt).catch(()=>broadcast());
 });
@@ -247,7 +248,7 @@ for(const actor of Object.values(actors)) {
 }
 broadcast();
 const polling=setInterval(()=>{
-  if(agent.busy || messaging.proof.REAL_TWO_WAY_MCP_MESSAGING!=='PASS')return;
+  if(agent.busy || !messaging.network)return;
   for(const id of ['A','B'] as const){
     if(actors[id].connected&&!actors[id].busy&&![...pending.values()].some(p=>p.actor===id))
       void messaging.receive(id).then(()=>id==='A'?agent.summarizeNewReplies():undefined).catch(()=>{});

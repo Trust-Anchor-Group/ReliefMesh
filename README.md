@@ -30,9 +30,9 @@ The single correlated messaging test passed A → B → A using SendChatMessage 
 
 The AI sees only the real SendChatMessage and GetMessage schemas. The dispatcher limits it to the configured volunteer and known incoming messages; it exposes no payments or identity mutations. The volunteer replies as a human. Incoming messages and conversation text stay in memory and disappear on backend restart; the durable test proof remains. No simulated Neuro results, Agent API calls, or encryption claims.
 
-## Not complete yet
+## Demo status
 
-AI-provider configuration and a live AI-driven UI exchange remain required. Identity petition is **not available in the current demo**: a live attempt exposed missing recipient callback registration in Neuro-Ali. The unproven action is omitted; see docs/petition-investigation.md. Signatures are not implemented. Never interpret identity readiness as cross-party verification.
+The live AI-driven browser exchange passed on 2026-09-06: the model selected SendChatMessage, Actor B displayed the real request, the volunteer UI sent a demo reply, and Actor A received it before the AI summarized the actual 19:00 delivery confirmation. Identity petition is **not available in the current demo**: a live attempt exposed missing recipient callback registration in Neuro-Ali. The unproven action is omitted; see docs/petition-investigation.md. Signatures are not implemented. Never interpret identity readiness as cross-party verification.
 
 ## Lifecycle and privacy
 
@@ -44,5 +44,5 @@ To reload while idle, POST `/api/runtime/close` with header `X-ReliefMesh: 1`, t
 
 ## Checks
 
-`npm run build` type-checks backend and React and builds production assets. `npm test` checks real captured catalogs, live status, request-origin protection, result decoding and distinct JID validation. Tests do not simulate Neuro operation results. See `docs/checkpoint.md` for the current human checkpoint.
+`npm run build` type-checks backend and React and builds production assets. `npm test` checks real captured catalogs, live status, request-origin protection, result decoding and distinct JID validation. Tests do not simulate Neuro operation results. See `docs/checkpoint.md` for verified demo evidence and the runbook.
 

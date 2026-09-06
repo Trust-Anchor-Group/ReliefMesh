@@ -18,7 +18,7 @@ export class NeuroActor extends EventEmitter {
     this.client.setRequestHandler('elicitation/create', (request, context) =>
       this.elicit(this.id, request.params, context.mcpReq.signal));
     this.client.onclose = () => { this.connected = false; this.activity('connection','closed'); };
-    this.client.onerror = () => this.activity('protocol','error');
+    this.client.onerror = () => { this.connected = false; this.activity('protocol','error'); };
   }
   private activity(operation: string, status: string) {
     this.emit('activity', {actor:this.id, operation, status, timestamp:new Date().toISOString()});
