@@ -42,7 +42,7 @@ The live AI-driven browser exchange passed on 2026-09-06: the model selected Sen
 
 ## Lifecycle and privacy
 
-Open exact elicitation URLs through Setup. Credentials, personal identity data and photos go directly to Neuro-hosted forms. Do not restart while an interaction is pending. Identity creation, photo submission, approval submission and the one-off petition have durable dispatch guards. An uncertain result requires inspection, never an automatic retry.
+Open exact elicitation URLs through Setup. In the current STDIO architecture, credentials, personal identity data and photos go to one-time forms hosted by the local Neuro-Ali process. They are MCP URL elicitation, not hosted OAuth redirects; see [the authentication investigation](docs/neuro-auth-onboarding-investigation.md). Do not restart while an interaction is pending. Identity creation, photo submission, approval submission and the one-off petition have durable dispatch guards. An uncertain result requires inspection, never an automatic retry.
 
 Use `.runtime` only for local ignored state: safe operation guards, participant addresses, safe identity IDs and proof. No raw tool results, passwords, photos or PII are logged by ReliefMesh. Neuro-Ali owns its separate runtime logging. Do not commit either runtime. This is a loopback-only reference app, not a deployed multi-user service.
 
