@@ -7,6 +7,7 @@ export type ActorId = 'A' | 'B';
 export class NeuroActor extends EventEmitter {
   readonly client: Client;
   private transport?: StdioClientTransport;
+  private queue:Promise<unknown>=Promise.resolve();
   tools: Tool[] = [];
   connected = false;
   busy?: string;
@@ -56,19 +57,24 @@ export class NeuroActor extends EventEmitter {
     return tools;
   }
   async listResources() {
-    const resources=[];let cursor:string|undefined;const seen=new Set<string>();
-    do {const page=await this.client.listResources(cursor?{cursor}:undefined);resources.push(...page.resources);cursor=page.nextCursor;
-      if(cursor&&seen.has(cursor))throw new Error('Repeated resource cursor');if(cursor)seen.add(cursor);
-    }while(cursor);return resources;
+    return this.enqueue(async()=>{
+      const resources=[];let cursor:string|undefined;const seen=new Set<string>();
+      do {const page=await this.client.listResources(cursor?{cursor}:undefined);resources.push(...page.resources);cursor=page.nextCursor;
+        if(cursor&&seen.has(cursor))throw new Error('Repeated resource cursor');if(cursor)seen.add(cursor);
+      }while(cursor);return resources;
+    });
   }
-  async readResource(uri:string){const result=await this.client.readResource({uri,_meta:{'reliefmesh/format':'json'}});this.activity('resources/read','success');return result;}
-  async subscribeResource(uri:string){await this.client.subscribeResource({uri});this.activity('resources/subscribe','success');}
-  async unsubscribeResource(uri:string){await this.client.unsubscribeResource({uri});this.activity('resources/unsubscribe','success');}
-  private queue:Promise<unknown>=Promise.resolve();
+  async listResourceTemplates(){return this.enqueue(()=>this.client.listResourceTemplates());}
+  async readResource(uri:string){return this.enqueue(async()=>{const result=await this.client.readResource({uri,_meta:{'reliefmesh/format':'json'}});this.activity('resources/read','success');return result;});}
+  async subscribeResource(uri:string){await this.enqueue(()=>this.client.subscribeResource({uri}));this.activity('resources/subscribe','success');}
+  async unsubscribeResource(uri:string){await this.enqueue(()=>this.client.unsubscribeResource({uri}));this.activity('resources/unsubscribe','success');}
+  private enqueue<T>(operation:()=>Promise<T>){
+    const result=this.queue.then(operation);
+    this.queue=result.catch(()=>{});return result;
+  }
   callTool(name:string,args:Record<string,unknown>){
     this.activity('SIGN_TRACE_ACTOR_CALL_ENTER',name);
-    const result=this.queue.then(()=>{this.activity('SIGN_TRACE_QUEUE_ACQUIRED',name);return this.executeTool(name,args);});
-    this.queue=result.catch(()=>{});return result;
+    return this.enqueue(()=>{this.activity('SIGN_TRACE_QUEUE_ACQUIRED',name);return this.executeTool(name,args);});
   }
   private async executeTool(name: string, args: Record<string, unknown>) {
     if (!this.connected) throw new Error('Actor disconnected');

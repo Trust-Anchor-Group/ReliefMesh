@@ -28,11 +28,7 @@ export class Messaging {
     await writeFile('.runtime/network.json',JSON.stringify(n));this.network=n;this.changed();
   }
   async resources(id:ActorId){
-    const resources=[];let cursor:string|undefined;const seen=new Set<string>();
-    do{const page=await this.actors[id].client.listResources(cursor?{cursor}:undefined);
-      resources.push(...page.resources);cursor=page.nextCursor;
-      if(cursor&&seen.has(cursor))throw new Error('Repeated resource cursor');if(cursor)seen.add(cursor);
-    }while(cursor);return resources;
+    return this.actors[id].listResources();
   }
   async receive(id:ActorId){
     if(!this.network||this.scanning[id]||this.actors[id].busy)return;

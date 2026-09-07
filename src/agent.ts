@@ -11,12 +11,12 @@ type Dispatch=(name:string,args:Record<string,unknown>)=>Promise<unknown>;
 export interface AgentProvider {
   readonly name:string;
   readonly model:string;
-  run(instructions:string,turns:Turn[],tools:Tool[],dispatch:Dispatch):Promise<string>;
+  run(instructions:string,turns:Turn[],tools:Tool[],dispatch:Dispatch,stopAfterMutation?:boolean):Promise<string>;
 }
 class OpenAIProvider implements AgentProvider {
   readonly name='openai';
   constructor(readonly model:string,private sdk:OpenAI){}
-  async run(instructions:string,turns:Turn[],tools:Tool[],dispatch:Dispatch){
+  async run(instructions:string,turns:Turn[],tools:Tool[],dispatch:Dispatch,stopAfterMutation=false){
     const input:OpenAI.Responses.ResponseInput=[...turns];
     for(let round=0;round<6;round++){
       const response=await this.sdk.responses.create({model:this.model,instructions,input,store:false,
@@ -30,6 +30,7 @@ class OpenAIProvider implements AgentProvider {
         try{output=await dispatch(call.name,JSON.parse(call.arguments));}
         catch{output={Success:false,Message:'Tool execution failed or was blocked. Do not retry automatically.'};}
         input.push({type:'function_call_output',call_id:call.call_id,output:JSON.stringify(output)});
+        if(stopAfterMutation&&output&&typeof output==='object'&&('Success' in output&&(output as {Success?:unknown}).Success===true||'ApprovalRequired' in output&&(output as {ApprovalRequired?:unknown}).ApprovalRequired===true))return 'The mission step completed through MCP.';
       }
     }
     return 'The operation limit was reached. Check the actual MCP activity before continuing.';
@@ -38,7 +39,7 @@ class OpenAIProvider implements AgentProvider {
 class CompatibleProvider implements AgentProvider {
   readonly name='openai-compatible';
   constructor(readonly model:string,private sdk:OpenAI){}
-  async run(instructions:string,turns:Turn[],tools:Tool[],dispatch:Dispatch){
+  async run(instructions:string,turns:Turn[],tools:Tool[],dispatch:Dispatch,stopAfterMutation=false){
     const messages:OpenAI.Chat.ChatCompletionMessageParam[]=[{role:'system',content:instructions},...turns];
     for(let round=0;round<6;round++){
       const response=await this.sdk.chat.completions.create({model:this.model,messages,
@@ -54,6 +55,7 @@ class CompatibleProvider implements AgentProvider {
         try{output=await dispatch(call.function.name,JSON.parse(call.function.arguments));}
         catch{output={Success:false,Message:'Tool execution failed or was blocked. Do not retry automatically.'};}
         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(output)});
+        if(stopAfterMutation&&output&&typeof output==='object'&&('Success' in output&&(output as {Success?:unknown}).Success===true||'ApprovalRequired' in output&&(output as {ApprovalRequired?:unknown}).ApprovalRequired===true))return 'The mission step completed through MCP.';
       }
     }
     return 'The operation limit was reached. Check the actual MCP activity before continuing.';

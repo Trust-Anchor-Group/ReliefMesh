@@ -39,7 +39,12 @@ function safeInteraction(params:ElicitRequestParams):ElicitRequestParams {
  return {...params,message};
 }
 function snapshot() {
-  return {mission:mission.snapshot,onboarding,trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  const missionState=mission.snapshot as any;
+  const latestHistory=mission.historySnapshot.at(-1);
+  const coordinatorBalance=missionState.balances?.A??latestHistory?.balancesAfter?.A;
+  const identitiesReady=(missionState.identityReadiness?.A&&missionState.identityReadiness?.B)||mission.historySnapshot.length>0;
+  const templateApproved=missionState.templates?.some((template:any)=>template.id==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io'&&template.state==='Approved'&&template.template===true)||mission.historySnapshot.some(entry=>entry.templateId==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io');
+  return {mission:missionState,missionHistory:mission.historySnapshot,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
     pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params:safeInteraction(params)})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
@@ -238,8 +243,8 @@ app.post('/api/actors/:actor/inspect',async(req,res)=>{
   const actor=actors[req.params.actor as ActorId];
   if(!actor || !actor.connected || actor.busy){res.sendStatus(409);return;}
   try {
-    if(req.body.kind==='resources') {res.json(await actor.client.listResources());return;}
-    if(req.body.kind==='templates') {res.json(await actor.client.listResourceTemplates());return;}
+    if(req.body.kind==='resources') {res.json({resources:await actor.listResources()});return;}
+    if(req.body.kind==='templates') {res.json(await actor.listResourceTemplates());return;}
     if(req.body.kind==='read' && typeof req.body.uri==='string') {res.json(await actor.readResource(req.body.uri));return;}
     if(req.params.actor==='A'&&req.body.kind==='balance') {res.json(neuroResult(await actor.callTool('GetBalance',{})));return;}
     if(req.params.actor==='A'&&req.body.kind==='fundingProviders') {res.json(neuroResult(await actor.callTool('GetServiceProvidersForBuyingEDaler',{})));return;}
@@ -286,6 +291,10 @@ app.post('/api/mission', (req,res)=>{
  if(mission.state||mission.busy||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Mission exists or actors are unavailable. Resume the preserved mission.'});return;}
  res.status(202).json({ok:true});void mission.start(req.body.prompt).catch(()=>broadcast());
 });
+app.post('/api/mission/start-another',async(_req,res)=>{
+ if(mission.busy||agent.busy||pending.size||Object.values(actors).some(actor=>actor.busy)){res.status(409).json({error:'Wait for the current operation to finish.'});return;}
+ try{await mission.startAnother();res.json({ok:true});}catch{res.status(409).json({error:'Complete the mission, or discard it before any signature or payment, to start another.'});}
+});
 app.post('/api/mission/template',async(req,res)=>{
  if(typeof req.body.templateId!=='string'){res.sendStatus(400);return;}
  try{res.json(await mission.verifyTemplate(req.body.templateId));}catch{res.status(409).json({error:'Authoritative template verification failed; no template or contract was created.'});}
@@ -296,10 +305,6 @@ app.post('/api/mission/contract',async(_req,res)=>{
 app.post('/api/mission/replacement',(_req,res)=>{
  if(mission.busy||pending.size||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Actors or interaction unavailable'});return;}
  res.status(202).json({ok:true});void mission.sendPreparedReplacement().catch(()=>broadcast());
-});
-app.post('/api/mission/advance',(_req,res)=>{
- if(!mission.state||mission.busy||pending.size||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Complete the pending human interaction first.'});return;}
- res.status(202).json({ok:true});void mission.advance().catch(()=>broadcast());
 });
 app.post('/api/mission/approval/:id',async(req,res)=>{
  if(typeof req.body.accept!=='boolean'){res.sendStatus(400);return;}
@@ -320,6 +325,7 @@ for(const actor of Object.values(actors)) {
     console.log('ACTOR_'+actor.id+'_MCP=PASS ACTOR_'+actor.id+'_TOOLS='+actor.tools.length);
   } catch {console.log('ACTOR_'+actor.id+'_MCP=FAIL');}
 }
+await mission.recoverDiscovery().catch(()=>false);
 broadcast();
 const polling=setInterval(()=>{
   if(agent.busy || mission.busy || !messaging.network)return;

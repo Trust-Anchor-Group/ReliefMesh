@@ -8,6 +8,13 @@ web-dist/
 .neuroali-data*/
 *.jsonl
 *.log
+*.jwt
 *.key
 *.pem
+*.pfx
+credentials/
+chrome-*-profile/
+browser-profile*/
+*protocol*.log
+*sniffer*.log
 
