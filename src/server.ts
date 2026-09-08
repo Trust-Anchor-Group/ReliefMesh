@@ -1,34 +1,50 @@
 ﻿import express from 'express';
 import {Mission} from './mission.js';
+import {missionReimbursement} from './mission.js';
 import { CoordinationAgent } from './agent.js';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rename, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Ajv } from 'ajv';
 import type { ElicitRequestParams, ElicitResult } from '@modelcontextprotocol/client';
 import { NeuroActor, type ActorId } from './actor.js';
 import { neuroResult } from './result.js';
 import { Messaging, validateNetwork } from './messaging.js';
+import {config,runtimeDir,runtimePath} from './config.js';
+import {cookieValue,isSandboxLeaseState,SANDBOX_MAX_MISSIONS,SANDBOX_MAX_REIMBURSEMENT_TST,sandboxCookie,SandboxLeaseManager,type SandboxLeaseState} from './sandbox.js';
 
 const app = express();
-const port = 4317;
-const origin = 'http://localhost:' + port;
+const port = config.port;
+const origin = config.publicOrigin?.replace(/\/$/,'')??'http://localhost:' + port;
 const ajv = new Ajv({strict:false});
 const events: Record<string,unknown>[] = [];
-const streams = new Set<express.Response>();
+const streams = new Map<express.Response,string>();
 type Pending = {id:string; actor:ActorId; params:ElicitRequestParams; resolve:(result:ElicitResult)=>void};
 const pending = new Map<string,Pending>();
 const readiness: Record<ActorId,string> = {A:'Not checked',B:'Not checked'};
 type Onboarding = { credentialsConfirmed?:boolean; stage?:string; legalId?:string; identityState?:string };
-await mkdir('.runtime',{recursive:true});
+await mkdir(runtimeDir,{recursive:true});
 let onboarding: Onboarding = {};
-try { onboarding=JSON.parse(await readFile('.runtime/onboarding-B.json','utf8')); } catch(error) {
+try { onboarding=JSON.parse(await readFile(runtimePath('onboarding-B.json'),'utf8')); } catch(error) {
   if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
 }
 let trust: {status:string;petitionId?:string;recipientInteraction?:boolean;responseReceived?:boolean}={status:'not-tested'};
-try{trust=JSON.parse(await readFile('.runtime/trust.json','utf8'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
-async function saveTrust(){await writeFile('.runtime/trust.json',JSON.stringify(trust));}
-async function saveOnboarding() { await writeFile('.runtime/onboarding-B.json',JSON.stringify(onboarding)); }
+try{trust=JSON.parse(await readFile(runtimePath('trust.json'),'utf8'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+async function saveTrust(){await writeFile(runtimePath('trust.json'),JSON.stringify(trust));}
+async function saveOnboarding() { await writeFile(runtimePath('onboarding-B.json'),JSON.stringify(onboarding)); }
+let persistedLease:SandboxLeaseState|undefined;
+try{const value=JSON.parse(await readFile(runtimePath('sandbox-lease.json'),'utf8'));if(isSandboxLeaseState(value))persistedLease=value;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+const leases=new SandboxLeaseManager(persistedLease);
+let leaseWrite:Promise<void>=Promise.resolve();
+function saveLease(){
+  const lease=leases.snapshot;
+  const next=leaseWrite.then(async()=>{
+    if(!lease){await unlink(runtimePath('sandbox-lease.json')).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});return;}
+    await writeFile(runtimePath('sandbox-lease.tmp'),JSON.stringify(lease));
+    await rename(runtimePath('sandbox-lease.tmp'),runtimePath('sandbox-lease.json'));
+  });
+  leaseWrite=next.catch(()=>{});return next;
+}
 if(onboarding.credentialsConfirmed) readiness.B='XMPP operation succeeded; identity approval not verified';
 if(onboarding.stage==='readiness-confirmed')readiness.B='Post-approval MCP readiness confirmed';
 const operations = new Map<string,{actor:ActorId;name:string;status:string}>();
@@ -41,17 +57,22 @@ function safeInteraction(params:ElicitRequestParams):ElicitRequestParams {
 function snapshot() {
   const missionState=mission.snapshot as any;
   const latestHistory=mission.historySnapshot.at(-1);
+  const lease=leases.snapshot;
+  const visibleHistory=lease?mission.historySnapshot.filter(entry=>Date.parse(entry.completedAt)>Date.parse(lease.createdAt)):[];
   const coordinatorBalance=missionState.balances?.A??latestHistory?.balancesAfter?.A;
   const identitiesReady=(missionState.identityReadiness?.A&&missionState.identityReadiness?.B)||mission.historySnapshot.length>0;
   const templateApproved=missionState.templates?.some((template:any)=>template.id==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io'&&template.state==='Approved'&&template.template===true)||mission.historySnapshot.some(entry=>entry.templateId==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io');
-  return {mission:missionState,missionHistory:mission.historySnapshot,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  return {mission:missionState,missionHistory:visibleHistory,sandbox:lease?{createdAt:lease.createdAt,expiresAt:lease.expiresAt,lastActivity:lease.lastActivity,missionCount:lease.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:undefined,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
     pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params:safeInteraction(params)})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
 }
 function broadcast() {
   const data = 'data: ' + JSON.stringify(snapshot()) + '\n\n';
-  for (const response of streams) response.write(data);
+  for (const [response,token] of streams) {
+    if(!leases.authorize(token,false)){streams.delete(response);response.end();continue;}
+    response.write(data);
+  }
 }
 function elicit(actor:ActorId, params:ElicitRequestParams, signal:AbortSignal):Promise<ElicitResult> {
   // Acknowledge only receipt of the exact mission identity already disclosed by B.
@@ -78,8 +99,8 @@ function elicit(actor:ActorId, params:ElicitRequestParams, signal:AbortSignal):P
   });
 }
 const actors = {
-  A:new NeuroActor('A','C:\\Users\\alile\\NeuroAli\\.neuroali-data',52482,elicit),
-  B:new NeuroActor('B','C:\\Users\\alile\\NeuroAli\\.neuroali-data-b',52483,elicit)
+  A:new NeuroActor('A',config.neuroDataA,config.neuroPortA,config.neuroAliDll,elicit),
+  B:new NeuroActor('B',config.neuroDataB,config.neuroPortB,config.neuroAliDll,elicit)
 };
 const messaging=new Messaging(actors,broadcast);
 await messaging.load();
@@ -91,9 +112,13 @@ for(const actor of Object.values(actors)) actor.on('activity',event=>{
   events.push(event); if(events.length>200) events.shift(); broadcast();
 });
 app.disable('x-powered-by');
+app.set('trust proxy',process.env.RELIEFMESH_TRUST_PROXY==='1'?1:false);
+app.get('/health',(_req,res)=>res.json({status:Object.values(actors).every(actor=>actor.connected)?'ok':'degraded',service:'reliefmesh',ready:Object.values(actors).every(actor=>actor.connected)}));
 app.use((req,res,next)=>{
-  if(!['localhost:4317','127.0.0.1:4317'].includes(req.headers.host??'')) {res.sendStatus(403);return;}
-  if(req.headers.origin && ![origin,'http://127.0.0.1:4317'].includes(req.headers.origin)) {res.sendStatus(403);return;}
+  const allowedOrigins=new Set([origin,'http://localhost:'+port,'http://127.0.0.1:'+port]);
+  const allowedHosts=new Set([...allowedOrigins].map(value=>new URL(value).host));
+  if(!allowedHosts.has(req.headers.host??'')) {res.sendStatus(403);return;}
+  if(req.headers.origin && !allowedOrigins.has(req.headers.origin)) {res.sendStatus(403);return;}
   res.setHeader('Cache-Control','no-store');
   res.setHeader('Referrer-Policy','no-referrer');
   res.setHeader('X-Content-Type-Options','nosniff');
@@ -102,12 +127,51 @@ app.use((req,res,next)=>{
   next();
 });
 app.use(express.json({limit:'64kb'}));
+app.get('/api/sandbox/session',(req,res)=>{
+  const status=leases.status(cookieValue(req.headers.cookie));
+  const lease=leases.snapshot;
+  res.json(status==='owned'?{status,expiresAt:lease!.expiresAt,missionCount:lease!.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:{status:status==='expired'?'available':status});
+});
+let leaseAcquiring=false;
+app.post('/api/sandbox/lease',async(req,res)=>{
+  const token=cookieValue(req.headers.cookie);
+  const status=leases.status(token);
+  if(status==='owned'){
+    leases.authorize(token);await saveLease();
+    res.setHeader('Set-Cookie',sandboxCookie(token!,config.cookieSecure));
+    res.json({ok:true,expiresAt:leases.snapshot!.expiresAt});return;
+  }
+  if(status==='busy'||leaseAcquiring){res.status(409).json({error:'Demo currently in use'});return;}
+  leaseAcquiring=true;
+  try{
+    if(mission.busy||agent.busy||pending.size||Object.values(actors).some(actor=>actor.busy))throw new Error('Demo currently in use');
+    if(mission.state)await mission.startAnother();
+    if(status==='expired'){leases.clearExpired();await saveLease();}
+    messaging.resetSession();agent.resetSession();events.length=0;
+    const acquired=leases.acquire();await saveLease();
+    res.setHeader('Set-Cookie',sandboxCookie(acquired.token,config.cookieSecure));
+    res.status(201).json({ok:true,expiresAt:acquired.lease.expiresAt});
+  }catch{res.status(409).json({error:'Demo currently in use'});}
+  finally{leaseAcquiring=false;}
+});
+app.use('/api',(req,res,next)=>{
+  const token=cookieValue(req.headers.cookie);
+  if(!leases.authorize(token)){res.status(423).json({error:'Demo currently in use'});return;}
+  void saveLease().catch(()=>{});next();
+});
+app.use('/api',(req,res,next)=>{
+  if(!config.publicSandbox){next();return;}
+  const operatorMissionRoutes=['/mission/recover-volunteer-proposal','/mission/continue-approved-volunteer-signature','/mission/fund-and-prepare-payment','/mission/claim-operator-funding','/mission/reconcile-confirmed-payment','/mission/template','/mission/contract','/mission/replacement'];
+  if(req.path.startsWith('/actors/')||req.path.endsWith('/reset-never-sent')||['/network','/test/two-way','/runtime/close',...operatorMissionRoutes].includes(req.path)){res.sendStatus(404);return;}
+  next();
+});
 app.get('/api/status',(_req,res)=>res.json(snapshot()));
 app.get('/api/events',(req,res)=>{
   res.setHeader('Content-Type','text/event-stream');
   res.setHeader('Connection','keep-alive');res.flushHeaders();
-  streams.add(res);res.write('data: '+JSON.stringify(snapshot())+'\n\n');
-  const timer=setInterval(()=>res.write(': keepalive\n\n'),15_000);
+  const token=cookieValue(req.headers.cookie)!;
+  streams.set(res,token);res.write('data: '+JSON.stringify(snapshot())+'\n\n');
+  const timer=setInterval(()=>{if(!leases.authorize(token,false)){clearInterval(timer);streams.delete(res);res.end();return;}res.write(': keepalive\n\n');},15_000);
   req.on('close',()=>{clearInterval(timer);streams.delete(res);});
 });
 app.get('/api/actors/:actor/tools',(req,res)=>{
@@ -151,7 +215,7 @@ app.post('/api/actors/B/identity',async (_req,res)=>{
     res.status(409).json({error:'Actor B must be connected, idle and credential-ready'});return;
   }
   try {
-    await writeFile('.runtime/identity-B.create-once',new Date().toISOString(),{flag:'wx'});
+    await writeFile(runtimePath('identity-B.create-once'),new Date().toISOString(),{flag:'wx'});
   } catch {
     res.status(409).json({error:'Identity creation already reserved; never retry. Continue the existing application.'});return;
   }
@@ -179,7 +243,7 @@ app.post('/api/actors/B/photo',async (_req,res)=>{
   if(!actor.connected || actor.busy || onboarding.stage!=='photo-required' || !onboarding.legalId){
     res.status(409).json({error:'Continue the existing identity application'});return;
   }
-  try {await writeFile('.runtime/identity-B.photo-once',new Date().toISOString(),{flag:'wx'});}
+  try {await writeFile(runtimePath('identity-B.photo-once'),new Date().toISOString(),{flag:'wx'});}
   catch {res.status(409).json({error:'Photo interaction already started; continue it without retrying'});return;}
   onboarding.stage='photo-pending';await saveOnboarding();
   const id=randomUUID();operations.set(id,{actor:'B',name:'AddPhotoAttachmentElicitation',status:'pending'});
@@ -197,7 +261,7 @@ app.post('/api/actors/B/submit-approval',async (_req,res)=>{
   if(!actor.connected || actor.busy || onboarding.stage!=='ready-to-submit' || !onboarding.legalId){
     res.status(409).json({error:'Complete the photo interaction first'});return;
   }
-  try {await writeFile('.runtime/identity-B.submit-once',new Date().toISOString(),{flag:'wx'});}
+  try {await writeFile(runtimePath('identity-B.submit-once'),new Date().toISOString(),{flag:'wx'});}
   catch {res.status(409).json({error:'Approval submission already started; do not repeat it'});return;}
   onboarding.stage='submitting-approval';await saveOnboarding();
   const id=randomUUID();operations.set(id,{actor:'B',name:'ReadyForApproval',status:'pending'});
@@ -274,6 +338,7 @@ app.post('/api/test/two-way',(_req,res)=>{
 app.post('/api/messages/:actor',async(req,res)=>{
   const actorId=req.params.actor;
   if(actorId!=='A'&&actorId!=='B'){res.sendStatus(404);return;}
+  if(config.publicSandbox&&actorId!=='B'){res.sendStatus(404);return;}
   if(agent.busy&&actorId==='A'){res.status(409).json({error:'The coordinator agent is working'});return;}
   try{const success=await messaging.send(actorId,req.body.body,req.body.operationId);res.json({success});}
   catch{res.status(409).json({error:'Send blocked or uncertain. Check activity before sending again.'});}
@@ -281,15 +346,22 @@ app.post('/api/messages/:actor',async(req,res)=>{
 app.post('/api/agent',(_req,res)=>{
   const prompt=_req.body.prompt;
   if(typeof prompt!=='string'||!prompt.trim()||prompt.length>10000){res.sendStatus(400);return;}
+  if(config.publicSandbox&&!mission.state){res.status(409).json({error:'Start a sandbox mission first'});return;}
   if(!agent.status.configured){res.status(503).json({error:'Configure AI_PROVIDER, AI_MODEL and an API key in the backend environment.'});return;}
   if(Object.values(actors).some(a=>!a.connected)||!messaging.network){res.status(503).json({error:'Both MCP actors must be connected. Restart the idle ReliefMesh runtime if a session has failed.'});return;}
   if(agent.busy){res.status(409).json({error:'The agent is already working'});return;}
   res.status(202).json({ok:true});void agent.run(prompt).catch(()=>broadcast());
 });
-app.post('/api/mission', (req,res)=>{
+  let missionStarting=false;
+app.post('/api/mission',async(req,res)=>{
  if(typeof req.body.prompt!=='string'||!req.body.prompt.trim()||req.body.prompt.length>10000){res.sendStatus(400);return;}
- if(mission.state||mission.busy||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Mission exists or actors are unavailable. Resume the preserved mission.'});return;}
- res.status(202).json({ok:true});void mission.start(req.body.prompt).catch(()=>broadcast());
+ try{missionReimbursement(req.body.prompt);}catch(error){res.status(400).json({error:(error as Error).message});return;}
+ if(!agent.status.configured||!messaging.network){res.status(503).json({error:'Sandbox runtime is not ready'});return;}
+   if(missionStarting||mission.state||mission.busy||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Mission exists or actors are unavailable. Resume the preserved mission.'});return;}
+   missionStarting=true;
+   try{leases.recordMission(cookieValue(req.headers.cookie));await saveLease();}
+   catch(error){missionStarting=false;res.status(409).json({error:(error as Error).message});return;}
+   res.status(202).json({ok:true});void mission.start(req.body.prompt).catch(()=>broadcast()).finally(()=>{missionStarting=false;});
 });
 app.post('/api/mission/start-another',async(_req,res)=>{
  if(mission.busy||agent.busy||pending.size||Object.values(actors).some(actor=>actor.busy)){res.status(409).json({error:'Wait for the current operation to finish.'});return;}
@@ -314,14 +386,14 @@ app.post('/api/mission/approval/:id/reset-never-sent',async(req,res)=>{
  try{await mission.resetNeverSentSignApproval(req.params.id);res.json({ok:true});}catch{res.status(409).json({error:'Never-sent approval recovery rejected.'});}
 });
 app.use(express.static(resolve('web-dist')));
-app.get(['/', '/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
+app.get(config.publicSandbox?['/','/sandbox','/volunteer']:['/','/sandbox','/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
 app.use((_err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(400).json({error:'Request failed'}));
-const server=app.listen(port,'127.0.0.1',()=>console.log('ReliefMesh: '+origin+'/setup'));
+const server=app.listen(port,config.host,()=>console.log('ReliefMesh: '+origin+(config.publicSandbox?'/':'/setup')));
 for(const actor of Object.values(actors)) {
   try {
     await actor.connect();
-    await mkdir('.runtime',{recursive:true});
-    await writeFile('.runtime/tools-'+actor.id+'.json',JSON.stringify(actor.tools,null,2));
+    await mkdir(runtimeDir,{recursive:true});
+    await writeFile(runtimePath('tools-'+actor.id+'.json'),JSON.stringify(actor.tools,null,2));
     console.log('ACTOR_'+actor.id+'_MCP=PASS ACTOR_'+actor.id+'_TOOLS='+actor.tools.length);
   } catch {console.log('ACTOR_'+actor.id+'_MCP=FAIL');}
 }

@@ -11,7 +11,7 @@ export class NeuroActor extends EventEmitter {
   tools: Tool[] = [];
   connected = false;
   busy?: string;
-  constructor(readonly id: ActorId, readonly dataDir: string, readonly port: number,
+  constructor(readonly id: ActorId, readonly dataDir: string, readonly port: number,private executable:string,
     private elicit: (actor: ActorId, params: ElicitRequestParams, signal: AbortSignal) => Promise<ElicitResult>) {
     super();
     this.client = new Client({name: 'reliefmesh-actor-' + id, version:'0.1.0'},
@@ -27,7 +27,7 @@ export class NeuroActor extends EventEmitter {
   async connect() {
     if (this.transport) throw new Error('Actor already started');
     this.transport = new StdioClientTransport({command:'dotnet',
-      args:['C:\\Users\\alile\\NeuroAli\\bin\\Release\\net8.0\\NeuroAli.dll','-d',this.dataDir,'-p',String(this.port)],
+      args:[this.executable,'-d',this.dataDir,'-p',String(this.port)],
       stderr:'pipe'});
     const send=this.transport.send.bind(this.transport);
     this.transport.send=(message)=>{

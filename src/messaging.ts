@@ -2,6 +2,7 @@
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import type { NeuroActor, ActorId } from './actor.js';
 import { neuroResult } from './result.js';
+import {runtimePath} from './config.js';
 
 export type Network = { A:string; B:string };
 export type Message = {id:string; actor:ActorId; direction:'incoming'|'outgoing'; body:string; timestamp:string};
@@ -18,14 +19,15 @@ export class Messaging {
   private seen:Record<ActorId,Set<string>>={A:new Set(),B:new Set()};
   private scanning:Record<ActorId,boolean>={A:false,B:false};
   constructor(private actors:Record<ActorId,NeuroActor>,private changed:()=>void){}
+  resetSession(){this.messages=[];this.changed();}
   async load(){
-    try{const n=JSON.parse(await readFile('.runtime/network.json','utf8'));if(validateNetwork(n))this.network=n;}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
-    try{this.proof=JSON.parse(await readFile('.runtime/messaging-proof.json','utf8'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+    try{const n=JSON.parse(await readFile(runtimePath('network.json'),'utf8'));if(validateNetwork(n))this.network=n;}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+    try{this.proof=JSON.parse(await readFile(runtimePath('messaging-proof.json'),'utf8'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
   }
   async configure(n:Network){
     if(this.network && (this.network.A!==n.A||this.network.B!==n.B))throw new Error('Existing participants are locked for this lifecycle');
     if(!validateNetwork(n))throw new Error('Provide distinct bare XMPP addresses');
-    await writeFile('.runtime/network.json',JSON.stringify(n));this.network=n;this.changed();
+    await writeFile(runtimePath('network.json'),JSON.stringify(n));this.network=n;this.changed();
   }
   async resources(id:ActorId){
     return this.actors[id].listResources();
@@ -53,15 +55,15 @@ export class Messaging {
     if(typeof body!=='string'||body.length<1||body.length>10000)throw new Error('Message must contain 1–10000 characters');
     if(!/^[0-9a-f-]{36}$/i.test(operationId))throw new Error('Valid operation ID required');
     // No automatic retry after an ambiguous send.
-    await writeFile('.runtime/send-'+id+'-'+operationId+'.once',new Date().toISOString(),{flag:'wx'});
+    await writeFile(runtimePath('send-'+id+'-'+operationId+'.once'),new Date().toISOString(),{flag:'wx'});
     const result=await this.actors[id].callTool('SendChatMessage',{To:this.network[id==='A'?'B':'A'],Message:body,IsMarkdown:options.IsMarkdown??false,Language:options.Language??'en'});
     const success=!result.isError&&neuroResult(result).Success===true;
     if(success){this.messages.push({id:operationId,actor:id,direction:'outgoing',body,timestamp:new Date().toISOString()});this.changed();}
     return success;
   }
   private async saveProof(){
-    await writeFile('.runtime/messaging-proof.tmp',JSON.stringify(this.proof));
-    await rename('.runtime/messaging-proof.tmp','.runtime/messaging-proof.json');this.changed();
+    await writeFile(runtimePath('messaging-proof.tmp'),JSON.stringify(this.proof));
+    await rename(runtimePath('messaging-proof.tmp'),runtimePath('messaging-proof.json'));this.changed();
   }
   private async waitFor(id:ActorId,body:string){
     const deadline=Date.now()+45_000;
@@ -70,7 +72,7 @@ export class Messaging {
   }
   async test(){
     if(!this.network)throw new Error('Participant addresses required');
-    await writeFile('.runtime/two-way-test.once',new Date().toISOString(),{flag:'wx'});
+    await writeFile(runtimePath('two-way-test.once'),new Date().toISOString(),{flag:'wx'});
     const correlation=randomUUID();
     this.proof={correlation,status:'running'};await this.saveProof();
     const request='ReliefMesh connection test '+correlation+'. Please acknowledge.';

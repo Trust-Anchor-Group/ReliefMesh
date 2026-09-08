@@ -1,0 +1,18 @@
+[Unit]
+Description=ReliefMesh Live Sandbox
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=0
+TimeoutStopSec=120
+ExecStartPre=-/usr/bin/docker rm reliefmesh
+ExecStart=/usr/bin/docker run --name reliefmesh --env-file /etc/reliefmesh/reliefmesh.env -p 127.0.0.1:4317:4317 -v /srv/reliefmesh/neuroali:/opt/neuroali:ro -v /srv/reliefmesh/actor-a:/var/lib/neuro-a -v /srv/reliefmesh/actor-b:/var/lib/neuro-b -v /srv/reliefmesh/runtime:/var/lib/reliefmesh reliefmesh:live
+ExecStop=/usr/bin/docker stop --time 110 reliefmesh
+
+[Install]
+WantedBy=multi-user.target

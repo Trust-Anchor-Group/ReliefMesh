@@ -22,7 +22,7 @@ npm run build
 npm start
 ```
 
-Open [Coordinator](http://localhost:4317/), [Volunteer](http://localhost:4317/volunteer), or [Setup](http://localhost:4317/setup).
+Open the [landing page](http://localhost:4317/), acquire the Live Sandbox, and use the paired [Coordinator](http://localhost:4317/sandbox) and [Volunteer](http://localhost:4317/volunteer) workspaces. One browser receives an exclusive 30-minute lease over the existing Actor A/B pair; another visitor receives `Demo currently in use`. A session can start at most three missions, each capped at `0.03 TST` by the server.
 
 For AI, copy `.env.example` to local `.env`, set `AI_PROVIDER`, `AI_MODEL`, and `OPENAI_API_KEY` (or `AI_API_KEY`). Use a model your standalone API account can access. `openai` uses Responses; `openai-compatible` uses Chat Completions and also requires `AI_BASE_URL`. The SDK does not automatically retry requests. Keys stay on the backend and are never accepted by the UI.
 
@@ -44,11 +44,13 @@ The live AI-driven browser exchange passed on 2026-09-06: the model selected Sen
 
 Open exact elicitation URLs through Setup. In the current STDIO architecture, credentials, personal identity data and photos go to one-time forms hosted by the local Neuro-Ali process. They are MCP URL elicitation, not hosted OAuth redirects; see [the authentication investigation](docs/neuro-auth-onboarding-investigation.md). Do not restart while an interaction is pending. Identity creation, photo submission, approval submission and the one-off petition have durable dispatch guards. An uncertain result requires inspection, never an automatic retry.
 
-Use `.runtime` only for local ignored state: safe operation guards, participant addresses, safe identity IDs and proof. No raw tool results, passwords, photos or PII are logged by ReliefMesh. Neuro-Ali owns its separate runtime logging. Do not commit either runtime. This is a loopback-only reference app, not a deployed multi-user service.
+Use `.runtime` only for local ignored state: safe operation guards, participant addresses, safe identity IDs, the hashed sandbox lease and proof. No raw tool results, passwords, photos or PII are logged by ReliefMesh. Neuro-Ali owns its separate runtime logging. Do not commit either runtime. For the single-instance public container package, external mounts, HTTPS assumptions, environment variables and health checks, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 To reload while idle, POST `/api/runtime/close` with header `X-ReliefMesh: 1`, then run `npm start`. It refuses active tool calls, elicitation or AI work.
 
 ## Checks
 
-`npm run build` type-checks backend and React and builds production assets. `npm test` checks real captured catalogs, live status, request-origin protection, result decoding and distinct JID validation. Tests do not simulate Neuro operation results. See `docs/checkpoint.md` for verified demo evidence and the runbook.
+`npm run build` type-checks backend and React and builds production assets. `npm run test:unit` is self-contained. With the real backend already running, `npm run test:live` checks captured catalogs, lease isolation, live status, request-origin protection and the secret-free health endpoint without dispatching a mission or payment. `npm test` runs both groups. See `docs/checkpoint.md` for verified demo evidence and the runbook.
+
+Landing photo: Joel Muniz on Unsplash.
 

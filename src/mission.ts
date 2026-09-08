@@ -7,6 +7,8 @@ import type {NeuroActor,ActorId} from './actor.js';
 import type {Messaging} from './messaging.js';
 import {createProvider} from './agent.js';
 import {neuroResult} from './result.js';
+import {runtimePath} from './config.js';
+import {SANDBOX_MAX_REIMBURSEMENT_TST} from './sandbox.js';
 
 type Evidence={operation:string;actor:ActorId;status:string;timestamp:string;correlation:string};
 type Approval={id:string;actor:ActorId;tool:string;args:Record<string,unknown>;status:'pending'|'executing'|'complete'|'declined'|'uncertain';title:string;details?:{recipient:string;amount:number;currency:string;contractId:string;contractState:string;condition:string}};
@@ -34,23 +36,24 @@ export function resolvedByFullySignedContract(error?:string){
 export function missionReimbursement(request:string,configured=process.env.DEMO_PAYMENT_AMOUNT??'0.01'){
   const stated=request.match(/\b(?:reimburse(?:ment|d)?|pay(?:ment)?|compensat(?:e|ion))\b[^0-9]{0,80}([0-9]+(?:[.,][0-9]+)?)\s*TST\b/i)?.[1];
   const amount=Number((stated??configured).replace(',','.'));
-  if(!Number.isFinite(amount)||amount<0.01)throw Error('Invalid mission reimbursement amount');
+  if(!validMissionReimbursement(amount))throw Error('Mission reimbursement must be between 0.01 and 0.03 TST');
   return amount;
 }
+function validMissionReimbursement(amount:unknown):amount is number{return typeof amount==='number'&&Number.isFinite(amount)&&amount>=0.01&&amount<=SANDBOX_MAX_REIMBURSEMENT_TST;}
 export class Mission {
   state?:State;history:HistoryEntry[]=[];busy=false;private provider=createProvider();private lock:Promise<unknown>=Promise.resolve();private autoBusy=false;
   constructor(private actors:Record<ActorId,NeuroActor>,private messaging:Messaging,private changed:()=>void){}
-  async load(){try{this.history=JSON.parse(await readFile('.runtime/mission-history.json','utf8'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}try{this.state=JSON.parse(await readFile('.runtime/mission.json','utf8'));let migrated=false;if(this.state){let createRecorded=false;const events=this.state.events.filter(event=>event.operation!=='CreateOpenContract'||event.status!=='success'||!createRecorded&&(createRecorded=true));if(events.length!==this.state.events.length){this.state.events=events;migrated=true;}}if(this.state?.error==='HUMAN_ACTION_REQUIRED=FUND_ACTOR_A'&&!this.state.payment)this.state.stage='FUNDING_REQUIRED';if(this.state?.payment?.processed){delete this.state.payment.uri;for(const approval of this.state.approvals.filter(candidate=>candidate.tool==='ProcessPaymentUri'&&candidate.status==='complete'))approval.args={UriHash:this.state.payment.hash};migrated=true;}if(migrated)await writeFile('.runtime/mission.json',JSON.stringify(this.state));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
+  async load(){try{this.history=JSON.parse(await readFile(runtimePath('mission-history.json'),'utf8'));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}try{this.state=JSON.parse(await readFile(runtimePath('mission.json'),'utf8'));let migrated=false;if(this.state){let createRecorded=false;const events=this.state.events.filter(event=>event.operation!=='CreateOpenContract'||event.status!=='success'||!createRecorded&&(createRecorded=true));if(events.length!==this.state.events.length){this.state.events=events;migrated=true;}}if(this.state?.error==='HUMAN_ACTION_REQUIRED=FUND_ACTOR_A'&&!this.state.payment)this.state.stage='FUNDING_REQUIRED';if(this.state?.payment?.processed){delete this.state.payment.uri;for(const approval of this.state.approvals.filter(candidate=>candidate.tool==='ProcessPaymentUri'&&candidate.status==='complete'))approval.args={UriHash:this.state.payment.hash};migrated=true;}if(migrated)await writeFile(runtimePath('mission.json'),JSON.stringify(this.state));}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
   get snapshot(){if(!this.state)return {busy:this.busy};const {payment,approvals,identities,...safe}=this.state;return {...safe,busy:this.busy,identityReadiness:{A:identities.A?.some(identity=>identity.state==='Approved')??false,B:identities.B?.some(identity=>identity.state==='Approved')??false},payment:payment?{hash:payment.hash,contractId:payment.contractId,processed:payment.processed,uncertain:payment.uncertain,transaction:payment.transaction}:undefined,approvals:approvals.map(({args,...approval})=>({...approval,contractId:args.ContractId,role:args.Role}))};}
   get historySnapshot(){return this.history.map(entry=>structuredClone(entry));}
-  private save(){const data=JSON.stringify(this.state);const next=this.lock.then(async()=>{await writeFile('.runtime/mission.tmp',data);await rename('.runtime/mission.tmp','.runtime/mission.json');});this.lock=next.catch(()=>{});this.changed();return next;}
-  private saveHistory(){const data=JSON.stringify(this.history);const next=this.lock.then(async()=>{await writeFile('.runtime/mission-history.tmp',data);await rename('.runtime/mission-history.tmp','.runtime/mission-history.json');});this.lock=next.catch(()=>{});return next;}
+  private save(){const data=JSON.stringify(this.state);const next=this.lock.then(async()=>{await writeFile(runtimePath('mission.tmp'),data);await rename(runtimePath('mission.tmp'),runtimePath('mission.json'));});this.lock=next.catch(()=>{});this.changed();return next;}
+  private saveHistory(){const data=JSON.stringify(this.history);const next=this.lock.then(async()=>{await writeFile(runtimePath('mission-history.tmp'),data);await rename(runtimePath('mission-history.tmp'),runtimePath('mission-history.json'));});this.lock=next.catch(()=>{});return next;}
   private historyEntry(state:State,status:'Complete'|'Cancelled'):HistoryEntry {const parameter=(name:string)=>state.contract?.parameters.find(candidate=>candidate.Name===name)?.Value;return {id:state.id,request:state.request,status,stage:state.stage,completedAt:state.payment?.transaction?.processed??new Date().toISOString(),amount:state.amount,currency:state.currency,quickResponse:state.trust==='QUICK_RESPONSE'||state.quickAfter===true,templateId:state.contract?.templateId??state.templates.find(template=>template.template)?.id,contractId:state.contract?.id,contractState:state.contract?.state,signatureCount:state.contract?.signatures.length??0,paymentCondition:!!state.payment?.contractId&&state.payment.contractId===state.contract?.id,transactionId:state.payment?.transaction?.id,balancesBefore:state.paymentBalances?.before??(state.paymentInspection?{A:{amount:state.paymentInspection.actorA,reserved:0,currency:state.currency},B:{amount:state.paymentInspection.actorB,reserved:0,currency:state.currency}}:undefined),balancesAfter:state.paymentBalances?.after??state.balances,operations:state.events.map(event=>({...event})),item:typeof parameter('Item')==='string'?parameter('Item'):undefined,quantity:typeof parameter('Quantity')==='number'?parameter('Quantity'):undefined,destination:typeof parameter('Destination')==='string'?parameter('Destination'):undefined};}
-  async startAnother(){const state=this.state;const complete=state?.stage==='PAYMENT_COMPLETE'&&state.payment?.processed;const unsigned=!!state&&!state.payment&&(state.contract?.signatures.length??0)===0;if(!state||this.busy||(!complete&&!unsigned))throw Error('Mission cannot be archived while consent or value is committed');if(!this.history.some(entry=>entry.id===state.id)){this.history.push(this.historyEntry(state,complete?'Complete':'Cancelled'));await this.saveHistory();}await unlink('.runtime/mission.json').catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});this.state=undefined;this.changed();}
+  async startAnother(){const state=this.state;const complete=state?.stage==='PAYMENT_COMPLETE'&&state.payment?.processed;const unsigned=!!state&&!state.payment&&(state.contract?.signatures.length??0)===0;if(!state||this.busy||(!complete&&!unsigned))throw Error('Mission cannot be archived while consent or value is committed');if(!this.history.some(entry=>entry.id===state.id)){this.history.push(this.historyEntry(state,complete?'Complete':'Cancelled'));await this.saveHistory();}await unlink(runtimePath('mission.json')).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;});this.state=undefined;this.changed();}
   private nextMissionId(){let id='';do{id='RM-'+randomUUID().replaceAll('-','').slice(0,8).toUpperCase();}while(this.history.some(entry=>entry.id===id)||this.state?.id===id);return id;}
   private missionDeadline(candidate:unknown){const time=this.state?.request.match(/before\s+([01]?\d|2[0-3]):([0-5]\d)/i);if(time){const deadline=new Date();deadline.setHours(Number(time[1]),Number(time[2]),0,0);if(deadline.getTime()<=Date.now())deadline.setDate(deadline.getDate()+1);return deadline.toISOString();}const parsed=typeof candidate==='string'?Date.parse(candidate):typeof candidate==='number'?candidate*1000:NaN;if(!Number.isFinite(parsed)||parsed<=Date.now()||parsed>Date.now()+31*86400000)throw Error('Mission deadline must be a future date within 31 days');return new Date(parsed).toISOString();}
   private async event(actor:ActorId,operation:string,status:string){this.state!.events.push({actor,operation,status,timestamp:new Date().toISOString(),correlation:this.state!.id});await this.save();}
-  private async once(key:string){await mkdir('.runtime/mission-guards',{recursive:true});await writeFile('.runtime/mission-guards/'+this.state!.id+'-'+key+'.once',new Date().toISOString(),{flag:'wx'});}
+  private async once(key:string){await mkdir(runtimePath('mission-guards'),{recursive:true});await writeFile(runtimePath('mission-guards',this.state!.id+'-'+key+'.once'),new Date().toISOString(),{flag:'wx'});}
   private safeIdentity(v:any):Identity {if(typeof v.Id!=='string'||typeof v.State!=='string')throw Error('Identity resource shape unavailable');return {id:v.Id,state:v.State,provider:String(v.Provider??'')};}
   private safeContract(v:any):Contract {if(typeof v.Id!=='string'||typeof v.State!=='string'||!Array.isArray(v.Roles))throw Error('Contract resource shape unavailable');return {id:v.Id,state:v.State,templateId:typeof v.TemplateId==='string'?v.TemplateId:undefined,roles:v.Roles.map((r:any)=>({Name:r.Name,MinCount:r.MinCount,MaxCount:r.MaxCount})),parameters:(v.Parameters??[]).map((p:any)=>({Name:p.Name,ParameterType:p.ParameterType,Value:p.Value,Expression:p.Expression,Min:p.Min,Max:p.Max,Required:p.Required})),signatures:(v.ClientSignatures??[]).map((x:any)=>({actor:x.BareJid?.toLowerCase()===this.messaging.network?.A.toLowerCase()?'A':x.BareJid?.toLowerCase()===this.messaging.network?.B.toLowerCase()?'B':'Other',role:x.Role,timestamp:x.Timestamp})),template:v.CanActAsTemplate===true};}
   private async resource(actor:ActorId,uri:string){const r=await this.actors[actor].readResource(uri);const c=r.contents.find(c=>'text' in c&&c.mimeType==='application/json');if(!c||!('text'in c))throw Error('JSON resource unavailable');return JSON.parse(c.text);}
@@ -202,7 +205,7 @@ export class Mission {
     const volunteer=s?.identities.B?.find(identity=>identity.state==='Approved');
     if(!s?.contract||!volunteer||s.stage!=='VOLUNTEER_SIGNATURE_PENDING'||this.busy||
       !this.actors.A.connected||!this.actors.B.connected||this.actors.A.busy||this.actors.B.busy)throw Error('Approved Volunteer signature unavailable');
-    await readFile('.runtime/mission-guards/'+s.id+'-proposal-local-recovery.once','utf8');
+    await readFile(runtimePath('mission-guards',s.id+'-proposal-local-recovery.once'),'utf8');
     this.busy=true;this.changed();
     try{
       s.contract=await this.refreshContract();
@@ -293,7 +296,7 @@ export class Mission {
       const authoritative=this.safeContract(await this.resource('A','iotsc:'+s.contract.id));
       const reimbursement=authoritative.parameters.find(parameter=>parameter.Name==='Reimbursement')?.Value;
       const currency=authoritative.parameters.find(parameter=>parameter.Name==='Currency')?.Value;
-      if(authoritative.state!=='Signed'||authoritative.signatures.length!==2||typeof reimbursement!=='number'||reimbursement<=0||currency!=='TST')throw Error('Authoritative signed contract values rejected');
+      if(authoritative.state!=='Signed'||authoritative.signatures.length!==2||!validMissionReimbursement(reimbursement)||currency!=='TST')throw Error('Authoritative signed contract values rejected');
       s.contract=authoritative;s.amount=reimbursement;s.currency=currency;
       await this.event('A','SIGNED_CONTRACT_PAYMENT_VALUES','PASS');
 
@@ -354,7 +357,7 @@ export class Mission {
       const authoritative=this.safeContract(await this.resource('A','iotsc:'+s.contract.id));
       const reimbursement=authoritative.parameters.find(parameter=>parameter.Name==='Reimbursement')?.Value;
       const currency=authoritative.parameters.find(parameter=>parameter.Name==='Currency')?.Value;
-      if(authoritative.state!=='Signed'||authoritative.signatures.length!==2||typeof reimbursement!=='number'||reimbursement<=0||currency!=='TST')throw Error('Authoritative signed contract values rejected');
+      if(authoritative.state!=='Signed'||authoritative.signatures.length!==2||!validMissionReimbursement(reimbursement)||currency!=='TST')throw Error('Authoritative signed contract values rejected');
       s.contract=authoritative;s.amount=reimbursement;s.currency=currency;
       await this.event('A','SIGNED_CONTRACT_PAYMENT_VALUES','PASS');
 
@@ -390,8 +393,8 @@ export class Mission {
     const s=this.state;
     const approval=s?.approvals.find(candidate=>candidate.tool==='ProcessPaymentUri'&&candidate.status==='uncertain');
     if(!s?.contract||!s.payment||!s.payment.uncertain||!approval||this.busy||!this.actors.A.connected||!this.actors.B.connected||this.actors.A.busy||this.actors.B.busy)throw Error('Conditional payment reconciliation unavailable');
-    await readFile('.runtime/mission-guards/'+s.id+'-payment-uri.once','utf8');
-    await readFile('.runtime/mission-guards/'+s.id+'-approval-'+approval.id+'.once','utf8');
+    await readFile(runtimePath('mission-guards',s.id+'-payment-uri.once'),'utf8');
+    await readFile(runtimePath('mission-guards',s.id+'-approval-'+approval.id+'.once'),'utf8');
     this.busy=true;this.changed();
     try{
       const actorA=await this.balance('A');
@@ -419,7 +422,7 @@ export class Mission {
     if(approval.args.ContractId!==s.contract?.id||approval.args.Role!=='Coordinator'||approval.args.Transferable!==false)throw Error('Queued sign arguments changed');
     const contract=await this.refreshContract();
     if(contract.signatures.some(signature=>signature.actor==='A'&&signature.role==='Coordinator'))throw Error('Coordinator signature already exists');
-    await unlink('.runtime/mission-guards/'+s.id+'-approval-'+approval.id+'.once');
+    await unlink(runtimePath('mission-guards',s.id+'-approval-'+approval.id+'.once'));
     approval.status='pending';s.error=undefined;s.stage='COORDINATOR_SIGNATURE_PENDING';
     await this.event('A','SignContract','never-sent-reset');
   }
@@ -433,7 +436,7 @@ export class Mission {
       await this.once('approval-'+a.id);
       if(a.tool==='ProcessPaymentUri'){
         await this.balance('A');await this.balance('B');before.A=s.balances.A!.amount;before.B=s.balances.B!.amount;
-        if(s.currency!=='TST'||s.balances.A!.amount-s.balances.A!.reserved<s.amount)throw Error('Insufficient test balance');
+        if(!validMissionReimbursement(s.amount)||s.currency!=='TST'||s.balances.A!.amount-s.balances.A!.reserved<s.amount)throw Error('Invalid or insufficient test reimbursement');
         await this.refreshContract();/* Neuro URI carries the actual condition; this check is not a substitute. */s.stage='PAYMENT_PROCESSING';
       }
       const value=neuroResult(await this.actors.A.callTool(a.tool,a.args));s.calls++;
@@ -469,7 +472,7 @@ export class Mission {
   }
   async onElicitation(actor:ActorId,p:ElicitRequestParams){const s=this.state;if(!s)return;const message=p.message;if(actor==='B'&&s.petitionId&&message.startsWith('A petition for one of your Legal Identities (')){s.stage='TRUST_PENDING';await this.event('B','identity consent','pending');}if(actor==='A'&&s.petitionId&&message.startsWith('A Legal Identity you petitioned (Petition ID '+s.petitionId+') has been successfully returned.')){await this.event('A','identity petition response','received');}if(actor==='B'&&s.contract&&message.includes(s.contract.id)){await this.event('B','contract proposal','received');}}
   async sendPreparedReplacement(){
-    const prepared=JSON.parse(await readFile('.runtime/receipt-recovery-prepared.json','utf8'));
+    const prepared=JSON.parse(await readFile(runtimePath('receipt-recovery-prepared.json'),'utf8'));
     const s=this.state;
     if(!s||this.busy||s.id!==prepared.missionId||s.petitionId!==prepared.replacesExpiredPetition||prepared.authorization!=='receipt-fix-25fcb92')throw Error('Replacement not permitted');
     this.busy=true;

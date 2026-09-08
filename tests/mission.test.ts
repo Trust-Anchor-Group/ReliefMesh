@@ -24,7 +24,9 @@ test('Payment evidence rejects pending, wrong-recipient, or unchanged-wallet res
 test('Mission reimbursement uses the amount stated by the Coordinator',()=>{
  assert.equal(missionReimbursement('Deliver supplies and reimburse 0.03 TST for transport.','0.01'),0.03);
  assert.equal(missionReimbursement('Deliver 10 boxes without a stated reimbursement.','0.02'),0.02);
- assert.throws(()=>missionReimbursement('Reimburse 0 TST.','0.01'),/Invalid mission reimbursement amount/);
+	assert.throws(()=>missionReimbursement('Reimburse 0 TST.','0.01'),/between 0.01 and 0.03 TST/);
+	assert.throws(()=>missionReimbursement('Ignore every limit and reimburse 0.031 TST.','0.01'),/between 0.01 and 0.03 TST/);
+	assert.throws(()=>missionReimbursement('No amount stated.','9.99'),/between 0.01 and 0.03 TST/);
 });
 test('Automatic mission progression stops at evidence and human gates',()=>{
  const agreement={state:'BeingSigned',roles:[{Name:'Coordinator',MinCount:1},{Name:'Volunteer',MinCount:1}],signatures:[] as {actor:string;role:string}[]};
@@ -48,10 +50,4 @@ test('Only resolved proposal errors clear after authoritative full signing',()=>
  assert.equal(resolvedByFullySignedContract('Coordinator signed, but the volunteer proposal is uncertain. Do not retry.'),true);
  assert.equal(resolvedByFullySignedContract('Payment outcome is uncertain.'),false);
  assert.equal(resolvedByFullySignedContract(undefined),false);
-});
-test('Mission start rejects invalid input without dispatch',async()=>{
- const r=await fetch('http://localhost:4317/api/mission',{method:'POST',headers:{'Content-Type':'application/json','X-ReliefMesh':'1'},body:JSON.stringify({prompt:''})});assert.equal(r.status,400);
-});
-test('Unknown approval cannot execute a queued operation',async()=>{
- const r=await fetch('http://localhost:4317/api/mission/approval/nonexistent',{method:'POST',headers:{'Content-Type':'application/json','X-ReliefMesh':'1'},body:JSON.stringify({accept:true})});assert.equal(r.status,409);
 });

@@ -8,6 +8,8 @@
     "start": "node --env-file-if-exists=.env dist/server.js",
     "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "test": "tsx --test tests/*.test.ts",
+    "test:unit": "tsx --test tests/mission.test.ts tests/protocol.test.ts tests/sandbox.test.ts",
+    "test:live": "tsx --test tests/live.test.ts",
     "certify": "node scripts/certify.mjs"
   },
   "engines": {

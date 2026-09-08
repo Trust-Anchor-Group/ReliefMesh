@@ -82,6 +82,7 @@ export class CoordinationAgent {
   private summarized=new Set<string>();
   constructor(private actor:NeuroActor,private messaging:Messaging,private changed:()=>void){}
   get status(){return {configured:!!this.provider,provider:this.provider?.name,model:this.provider?.model,busy:this.busy,realMcpCalls:this.realMcpCalls,error:this.error};}
+  resetSession(){if(this.busy)throw new Error('Agent is busy');this.conversation=[];this.summarized.clear();this.error=undefined;this.realMcpCalls=0;this.changed();}
   private add(role:Turn['role'],content:string,kind?:string){
     this.conversation.push({role,content,kind,id:randomUUID(),timestamp:new Date().toISOString()});
     if(this.conversation.length>60)this.conversation.shift();this.changed();
