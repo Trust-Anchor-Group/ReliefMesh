@@ -1,9 +1,13 @@
 ﻿import { Client, type Tool, type ElicitRequestParams, type ElicitResult } from '@modelcontextprotocol/client';
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import {getDefaultEnvironment,StdioClientTransport} from '@modelcontextprotocol/client/stdio';
 import { neuroResult } from './result.js';
 import { EventEmitter } from 'node:events';
 
 export type ActorId = 'A' | 'B';
+export function neuroChildEnvironment(environment:NodeJS.ProcessEnv=process.env){
+  const salt=environment.FILES_DB_SALT;
+  return salt?{...getDefaultEnvironment(),FILES_DB_SALT:salt}:getDefaultEnvironment();
+}
 export class NeuroActor extends EventEmitter {
   readonly client: Client;
   private transport?: StdioClientTransport;
@@ -28,6 +32,7 @@ export class NeuroActor extends EventEmitter {
     if (this.transport) throw new Error('Actor already started');
     this.transport = new StdioClientTransport({command:'dotnet',
       args:[this.executable,'-d',this.dataDir,'-p',String(this.port)],
+      env:neuroChildEnvironment(),
       stderr:'pipe'});
     const send=this.transport.send.bind(this.transport);
     this.transport.send=(message)=>{
