@@ -1,6 +1,6 @@
 # ReliefMesh Live Sandbox Deployment
 
-ReliefMesh runs as one persistent application instance. It owns two long-lived Neuro-Ali STDIO children and grants one browser an exclusive 30-minute lease over that Actor A/B pair. Do not scale this container above one replica and do not run another process against either Neuro-Ali data directory.
+ReliefMesh runs as one persistent application instance. It owns two long-lived Neuro-Ali STDIO children and grants one browser an exclusive activity lease over that Actor A/B pair. Do not scale this container above one replica and do not run another process against either Neuro-Ali data directory.
 
 Hosted OAuth is the preferred future architecture, but it is blocked until the operator provisions an OAuth client. This package deliberately uses the already proven local Node + Neuro-Ali architecture. It does not add signup or retry OAuth registration.
 
@@ -50,6 +50,9 @@ NEUROALI_DATA_B=/var/lib/neuro-b
 NEUROALI_PORT_A=52482
 NEUROALI_PORT_B=52483
 DEMO_PAYMENT_AMOUNT=0.01
+SANDBOX_ACTIVITY_TTL_MS=600000
+SANDBOX_OWNER_TTL_MS=86400000
+SANDBOX_ACTIVE_MISSION_GRACE_MS=7200000
 AI_PROVIDER=openai
 AI_MODEL=your-tool-capable-model
 OPENAI_API_KEY=replace-on-host
@@ -58,6 +61,18 @@ OPENAI_API_KEY=replace-on-host
 For an OpenAI-compatible provider, set `AI_PROVIDER=openai-compatible`, `AI_BASE_URL`, `AI_MODEL`, and `AI_API_KEY` instead. `RELIEFMESH_PORT` is the private application port; keep it bound to loopback at the host boundary. `NEUROALI_DLL` must point to the mounted published Neuro-Ali DLL. The A and B data paths are the persistent Coordinator and Volunteer stores respectively, and `RELIEFMESH_RUNTIME_DIR` must be writable and persistent.
 
 Keep the environment file readable only by the deployment account. Do not put API keys, Neuro credentials, eDaler URIs, identity data, or browser lease cookies in source control, image layers, proxy logs, or monitoring labels.
+
+## Sandbox session lifecycle
+
+The public sandbox uses three independent server-side clocks:
+
+- `SANDBOX_ACTIVITY_TTL_MS` is the short sliding exclusivity lease. Authoritative API activity renews it; SSE heartbeats do not.
+- `SANDBOX_OWNER_TTL_MS` is the long-lived owner identity lifetime and cookie age. It should be longer than the active-mission grace.
+- `SANDBOX_ACTIVE_MISSION_GRACE_MS` is the bounded inactivity window in which the same owner can resume an active mission while other browsers remain blocked.
+
+Defaults are 10 minutes, 24 hours, and 2 hours respectively. Values must be positive milliseconds. The server persists only a SHA-256 hash of the opaque owner token along with the three lifecycle timestamps. A restart therefore preserves ownership, mission count, and active-mission exclusivity without storing the browser credential.
+
+The SPA revalidates `/api/sandbox/session` on load, navigation, focus, visibility return, SSE failure, and every 60 seconds. An owner revalidation slides the activity and owner clocks. When no active mission protects an expired lease, the next browser can acquire it. During active-mission grace, only the matching owner cookie can resume. Explicit release safely discards only a mission that has no signature or payment, clears the lease, and expires the cookie.
 
 ## Automatic start on a VM
 

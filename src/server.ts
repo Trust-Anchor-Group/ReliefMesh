@@ -11,7 +11,7 @@ import { NeuroActor, type ActorId } from './actor.js';
 import { neuroResult } from './result.js';
 import { Messaging, validateNetwork } from './messaging.js';
 import {config,runtimeDir,runtimePath} from './config.js';
-import {cookieValue,isSandboxLeaseState,SANDBOX_MAX_MISSIONS,SANDBOX_MAX_REIMBURSEMENT_TST,sandboxCookie,SandboxLeaseManager,type SandboxLeaseState} from './sandbox.js';
+import {cookieValue,expiredSandboxCookie,isSandboxLeaseState,SANDBOX_MAX_MISSIONS,SANDBOX_MAX_REIMBURSEMENT_TST,sandboxCookie,SandboxLeaseManager,type SandboxLeaseState} from './sandbox.js';
 
 const app = express();
 const port = config.port;
@@ -62,7 +62,7 @@ function snapshot() {
   const coordinatorBalance=missionState.balances?.A??latestHistory?.balancesAfter?.A;
   const identitiesReady=(missionState.identityReadiness?.A&&missionState.identityReadiness?.B)||mission.historySnapshot.length>0;
   const templateApproved=missionState.templates?.some((template:any)=>template.id==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io'&&template.state==='Approved'&&template.template===true)||mission.historySnapshot.some(entry=>entry.templateId==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io');
-  return {mission:missionState,missionHistory:visibleHistory,sandbox:lease?{createdAt:lease.createdAt,expiresAt:lease.expiresAt,lastActivity:lease.lastActivity,missionCount:lease.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:undefined,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  return {mission:missionState,missionHistory:visibleHistory,sandbox:lease?{createdAt:lease.createdAt,expiresAt:lease.activityExpiresAt,activityExpiresAt:lease.activityExpiresAt,ownerExpiresAt:lease.ownerExpiresAt,lastActivity:lease.lastActivity,missionCount:lease.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:undefined,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
     pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params:safeInteraction(params)})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
@@ -70,7 +70,7 @@ function snapshot() {
 function broadcast() {
   const data = 'data: ' + JSON.stringify(snapshot()) + '\n\n';
   for (const [response,token] of streams) {
-    if(!leases.authorize(token,false)){streams.delete(response);response.end();continue;}
+    if(!leases.authorize(token,mission.state?.id,false)){streams.delete(response);response.end();continue;}
     response.write(data);
   }
 }
@@ -127,36 +127,53 @@ app.use((req,res,next)=>{
   next();
 });
 app.use(express.json({limit:'64kb'}));
-app.get('/api/sandbox/session',(req,res)=>{
-  const status=leases.status(cookieValue(req.headers.cookie));
+app.get('/api/sandbox/session',async(req,res)=>{
+  const token=cookieValue(req.headers.cookie);
+  const status=leases.status(token,mission.state?.id);
+  if(status==='owned'){
+    leases.authorize(token,mission.state?.id);await saveLease();
+    res.setHeader('Set-Cookie',sandboxCookie(token!,config.cookieSecure));
+  }
   const lease=leases.snapshot;
-  res.json(status==='owned'?{status,expiresAt:lease!.expiresAt,missionCount:lease!.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:{status:status==='expired'?'available':status});
+  res.json(status==='owned'?{status,expiresAt:lease!.activityExpiresAt,activityExpiresAt:lease!.activityExpiresAt,ownerExpiresAt:lease!.ownerExpiresAt,activeMissionId:lease!.activeMissionId,missionCount:lease!.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:{status:status==='expired'?'available':status});
 });
 let leaseAcquiring=false;
 app.post('/api/sandbox/lease',async(req,res)=>{
   const token=cookieValue(req.headers.cookie);
-  const status=leases.status(token);
+  const status=leases.status(token,mission.state?.id);
   if(status==='owned'){
-    leases.authorize(token);await saveLease();
+    leases.authorize(token,mission.state?.id);await saveLease();
     res.setHeader('Set-Cookie',sandboxCookie(token!,config.cookieSecure));
-    res.json({ok:true,expiresAt:leases.snapshot!.expiresAt});return;
+    res.json({ok:true,expiresAt:leases.snapshot!.activityExpiresAt,activeMissionId:leases.snapshot!.activeMissionId});return;
   }
   if(status==='busy'||leaseAcquiring){res.status(409).json({error:'Demo currently in use'});return;}
   leaseAcquiring=true;
   try{
     if(mission.busy||agent.busy||pending.size||Object.values(actors).some(actor=>actor.busy))throw new Error('Demo currently in use');
     if(mission.state)await mission.startAnother();
-    if(status==='expired'){leases.clearExpired();await saveLease();}
+    if(status==='expired'){leases.clearExpired(mission.state?.id);await saveLease();}
     messaging.resetSession();agent.resetSession();events.length=0;
     const acquired=leases.acquire();await saveLease();
     res.setHeader('Set-Cookie',sandboxCookie(acquired.token,config.cookieSecure));
-    res.status(201).json({ok:true,expiresAt:acquired.lease.expiresAt});
+    res.status(201).json({ok:true,expiresAt:acquired.lease.activityExpiresAt});
   }catch{res.status(409).json({error:'Demo currently in use'});}
   finally{leaseAcquiring=false;}
 });
+app.post('/api/sandbox/release',async(req,res)=>{
+  const token=cookieValue(req.headers.cookie);
+  const missionId=mission.state?.id;
+  if(!leases.authorize(token,missionId,false)){res.status(423).json({error:'Sandbox lease required'});return;}
+  if(mission.busy||agent.busy||pending.size||Object.values(actors).some(actor=>actor.busy)){res.status(409).json({error:'Wait for the current operation to finish.'});return;}
+  try{
+    if(missionId)await mission.startAnother();
+    if(!leases.release(token,missionId)){throw new Error('Sandbox lease required');}
+    messaging.resetSession();agent.resetSession();events.length=0;await saveLease();
+    res.setHeader('Set-Cookie',expiredSandboxCookie(config.cookieSecure));res.json({ok:true});broadcast();
+  }catch{res.status(409).json({error:'Complete the mission, or discard it before any signature or payment, before releasing the sandbox.'});}
+});
 app.use('/api',(req,res,next)=>{
   const token=cookieValue(req.headers.cookie);
-  if(!leases.authorize(token)){res.status(423).json({error:'Demo currently in use'});return;}
+  if(!leases.authorize(token,mission.state?.id)){res.status(423).json({error:'Demo currently in use'});return;}
   void saveLease().catch(()=>{});next();
 });
 app.use('/api',(req,res,next)=>{
@@ -171,7 +188,7 @@ app.get('/api/events',(req,res)=>{
   res.setHeader('Connection','keep-alive');res.flushHeaders();
   const token=cookieValue(req.headers.cookie)!;
   streams.set(res,token);res.write('data: '+JSON.stringify(snapshot())+'\n\n');
-  const timer=setInterval(()=>{if(!leases.authorize(token,false)){clearInterval(timer);streams.delete(res);res.end();return;}res.write(': keepalive\n\n');},15_000);
+  const timer=setInterval(()=>{if(!leases.authorize(token,mission.state?.id,false)){clearInterval(timer);streams.delete(res);res.end();return;}res.write(': keepalive\n\n');},15_000);
   req.on('close',()=>{clearInterval(timer);streams.delete(res);});
 });
 app.get('/api/actors/:actor/tools',(req,res)=>{
@@ -359,13 +376,15 @@ app.post('/api/mission',async(req,res)=>{
  if(!agent.status.configured||!messaging.network){res.status(503).json({error:'Sandbox runtime is not ready'});return;}
    if(missionStarting||mission.state||mission.busy||Object.values(actors).some(a=>!a.connected)){res.status(409).json({error:'Mission exists or actors are unavailable. Resume the preserved mission.'});return;}
    missionStarting=true;
-   try{leases.recordMission(cookieValue(req.headers.cookie));await saveLease();}
+   const missionId=mission.createMissionId();
+   try{leases.recordMission(cookieValue(req.headers.cookie),missionId);await saveLease();}
    catch(error){missionStarting=false;res.status(409).json({error:(error as Error).message});return;}
-   res.status(202).json({ok:true});void mission.start(req.body.prompt).catch(()=>broadcast()).finally(()=>{missionStarting=false;});
+   res.status(202).json({ok:true,missionId});void mission.start(req.body.prompt,missionId).catch(()=>broadcast()).finally(()=>{missionStarting=false;});
 });
 app.post('/api/mission/start-another',async(_req,res)=>{
  if(mission.busy||agent.busy||pending.size||Object.values(actors).some(actor=>actor.busy)){res.status(409).json({error:'Wait for the current operation to finish.'});return;}
- try{await mission.startAnother();res.json({ok:true});}catch{res.status(409).json({error:'Complete the mission, or discard it before any signature or payment, to start another.'});}
+ const missionId=mission.state?.id;
+ try{await mission.startAnother();if(missionId)leases.finishMission(cookieValue(_req.headers.cookie),missionId);await saveLease();res.json({ok:true});}catch{res.status(409).json({error:'Complete the mission, or discard it before any signature or payment, to start another.'});}
 });
 app.post('/api/mission/template',async(req,res)=>{
  if(typeof req.body.templateId!=='string'){res.sendStatus(400);return;}
@@ -386,7 +405,7 @@ app.post('/api/mission/approval/:id/reset-never-sent',async(req,res)=>{
  try{await mission.resetNeverSentSignApproval(req.params.id);res.json({ok:true});}catch{res.status(409).json({error:'Never-sent approval recovery rejected.'});}
 });
 app.use(express.static(resolve('web-dist')));
-app.get(config.publicSandbox?['/','/sandbox','/volunteer']:['/','/sandbox','/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
+app.get(config.publicSandbox?['/','/sandbox','/coordinator','/volunteer']:['/','/sandbox','/coordinator','/setup','/volunteer'],(_req,res)=>res.sendFile(resolve('web-dist/index.html')));
 app.use((_err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(400).json({error:'Request failed'}));
 const server=app.listen(port,config.host,()=>console.log('ReliefMesh: '+origin+(config.publicSandbox?'/':'/setup')));
 for(const actor of Object.values(actors)) {

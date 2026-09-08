@@ -63,9 +63,31 @@ test('Second visitor cannot read or mutate the leased sandbox',async()=>{
   assert.equal((await fetch(baseUrl+'/api/status')).status,423);
   assert.equal((await fetch(baseUrl+'/api/sandbox/lease',{method:'POST',headers:{'X-ReliefMesh':'1'}})).status,409);
 });
+test('Owner session refresh preserves the lease and mission count',async()=>{
+  const before=await (await fetch(baseUrl+'/api/sandbox/session',{headers:{Cookie:leaseCookie}})).json();
+  assert.equal(before.status,'owned');
+  const refreshed=await fetch(baseUrl+'/api/sandbox/lease',{method:'POST',headers:ownerHeaders});
+  assert.equal(refreshed.status,200);
+  assert.ok(refreshed.headers.getSetCookie()[0]?.includes('HttpOnly'));
+  const after=await refreshed.json();
+  assert.equal(after.ok,true);
+  assert.equal((await (await fetch(baseUrl+'/api/sandbox/session',{headers:{Cookie:leaseCookie}})).json()).missionCount,before.missionCount);
+});
 test('Invalid mission and unknown approval cannot dispatch Neuro operations',async()=>{
   const invalid=await fetch(baseUrl+'/api/mission',{method:'POST',headers:{...ownerHeaders,'Content-Type':'application/json'},body:JSON.stringify({prompt:''})});
   assert.equal(invalid.status,400);
   const approval=await fetch(baseUrl+'/api/mission/approval/nonexistent',{method:'POST',headers:{...ownerHeaders,'Content-Type':'application/json'},body:JSON.stringify({accept:true})});
   assert.equal(approval.status,409);
+});
+test('Owner release invalidates its cookie and makes the sandbox acquirable',async()=>{
+  const released=await fetch(baseUrl+'/api/sandbox/release',{method:'POST',headers:ownerHeaders});
+  assert.equal(released.status,200,await released.text());
+  assert.ok(released.headers.getSetCookie()[0]?.includes('Max-Age=0'));
+  assert.equal((await fetch(baseUrl+'/api/status',{headers:ownerHeaders})).status,423);
+
+  const next=await fetch(baseUrl+'/api/sandbox/lease',{method:'POST',headers:{'X-ReliefMesh':'1'}});
+  assert.equal(next.status,201,await next.text());
+  const nextCookie=next.headers.getSetCookie()[0]?.split(';')[0];
+  assert.ok(nextCookie);
+  assert.equal((await fetch(baseUrl+'/api/sandbox/release',{method:'POST',headers:{Cookie:nextCookie,'X-ReliefMesh':'1'}})).status,200);
 });

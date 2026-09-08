@@ -16,9 +16,9 @@ async function post(path:string,body:unknown={}) {
 const clock=(value:string)=>new Date(value).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 const shortId=(value?:string)=>value?value.length>20?value.slice(0,8)+'...'+value.slice(-8):value:'Not available';
 function Mark(){return <svg width="29" height="29" viewBox="0 0 29 29" fill="none" aria-hidden="true"><path d="M5 6h8v8H5zM16 6h8v8h-8zM5 17h8v8H5zM16 17h8v8h-8z" fill="currentColor"/><path d="M12 9h6M9 12v7M20 12v7M12 21h6" stroke="currentColor" strokeWidth="2"/></svg>}
-function Landing({access,onStart}:{access:'loading'|'available'|'busy'|'owned';onStart:()=>void}){
+function Landing({access,activeMissionId,onStart}:{access:'loading'|'available'|'busy'|'owned';activeMissionId?:string;onStart:()=>void}){
   const busy=access==='busy';
-  return <main className="landing"><section className="landing-hero"><span className="eyebrow">LIVE NEURO SANDBOX</span><h1>ReliefMesh</h1><p className="landing-lede">Give an AI a mission. Neuro provides the trust.</p><div className="landing-actions"><button disabled={busy||access==='loading'} onClick={onStart}>{access==='owned'?'Open workspace':access==='loading'?'Checking availability…':'Try Live Sandbox'}</button><span><button className="secondary" disabled>Continue with Neuro</button><small>Coming soon</small></span></div><p className="sandbox-note">The sandbox uses temporary Lab identities and test TST. Messaging, MCP calls, contracts, signatures, and transactions are real.</p>{busy&&<div className="busy-banner" role="status"><strong>Demo currently in use</strong><p>One Coordinator and Volunteer pair share the live Neuro runtime. Please return when the current 30-minute session ends.</p></div>}</section><section className="landing-band" aria-label="Sandbox flow"><strong>Coordinator workspace</strong><span>Mission → trust → agreement → reimbursement</span><strong>Volunteer workspace</strong></section></main>;
+  return <main className="landing"><section className="landing-hero"><span className="eyebrow">LIVE NEURO SANDBOX</span><h1>ReliefMesh</h1><p className="landing-lede">Give an AI a mission. Neuro provides the trust.</p><div className="landing-actions"><button disabled={busy||access==='loading'} onClick={onStart}>{access==='owned'?(activeMissionId?'Continue current mission':'Open workspace'):access==='loading'?'Checking availability…':'Try Live Sandbox'}</button><span><button className="secondary" disabled>Continue with Neuro</button><small>Coming soon</small></span></div><p className="sandbox-note">The sandbox uses temporary Lab identities and test TST. Messaging, MCP calls, contracts, signatures, and transactions are real.</p>{busy&&<div className="busy-banner" role="status"><strong>Demo currently in use</strong><p>One Coordinator and Volunteer pair share the live Neuro runtime. Availability updates automatically.</p></div>}</section><section className="landing-band" aria-label="Sandbox flow"><strong>Coordinator workspace</strong><span>Mission → trust → agreement → reimbursement</span><strong>Volunteer workspace</strong></section></main>;
 }
 function AccessPage({kind,onStart}:{kind:'loading'|'available'|'busy';onStart:()=>void}){
   if(kind==='loading')return <main className="access-page"><span className="eyebrow">LIVE NEURO SANDBOX</span><h1>Checking sandbox availability</h1></main>;
@@ -57,21 +57,41 @@ function App(){
   const route=location.pathname;
   const landing=route==='/', volunteer=route==='/volunteer', setup=route==='/setup';
   const [access,setAccess]=useState<'loading'|'available'|'busy'|'owned'>('loading');
+  const [activeMissionId,setActiveMissionId]=useState<string>();
   const [state,setState]=useState<any>();const [error,setError]=useState('');const [live,setLive]=useState(false);
   const [text,setText]=useState('');const [sending,setSending]=useState(false);
   const [addresses,setAddresses]=useState({A:'',B:''});
   useEffect(()=>{
     document.title=landing?'ReliefMesh · Live Sandbox':'ReliefMesh · '+(setup?'Setup':volunteer?'Volunteer':'Coordinator');
     let closed=false;let source:EventSource|undefined;
-    void fetch('/api/sandbox/session').then(response=>response.json()).then(session=>{
-      if(closed)return;
-      if(session.status!=='owned'){setAccess(session.status==='busy'?'busy':'available');return;}
-      setAccess('owned');
-      if(!landing){source=new EventSource('/api/events');source.onmessage=e=>{setState(JSON.parse(e.data));setLive(true);};source.onerror=()=>setLive(false);}
-    }).catch(()=>setAccess('available'));
-    return()=>{closed=true;source?.close();};
-  },[landing,setup,volunteer]);
-  const startSandbox=async()=>{setError('');try{const response=await post('/api/sandbox/lease');if(response.ok)location.assign('/sandbox');}catch(e){setAccess('busy');setError((e as Error).message);}};
+    const closeEvents=()=>{source?.close();source=undefined;setLive(false);};
+    const openEvents=()=>{
+      if(landing||source)return;
+      source=new EventSource('/api/events');
+      source.onmessage=event=>{if(!closed){setState(JSON.parse(event.data));setLive(true);}};
+      source.onerror=()=>{if(!closed){setLive(false);void revalidate();}};
+    };
+    const revalidate=async()=>{
+      try{
+        const response=await fetch('/api/sandbox/session',{cache:'no-store'});
+        if(!response.ok)throw new Error('Session check failed');
+        const session=await response.json();
+        if(closed)return;
+        if(session.status==='owned'){
+          setAccess('owned');setActiveMissionId(session.activeMissionId);openEvents();return;
+        }
+        closeEvents();setState(undefined);setActiveMissionId(undefined);setAccess(session.status==='busy'?'busy':'available');
+      }catch{if(!closed)setLive(false);}
+    };
+    const onFocus=()=>{void revalidate();};
+    const onVisibility=()=>{if(document.visibilityState==='visible')void revalidate();};
+    void revalidate();
+    const timer=window.setInterval(()=>void revalidate(),60_000);
+    window.addEventListener('focus',onFocus);document.addEventListener('visibilitychange',onVisibility);
+    return()=>{closed=true;window.clearInterval(timer);window.removeEventListener('focus',onFocus);document.removeEventListener('visibilitychange',onVisibility);source?.close();};
+  },[route]);
+  const startSandbox=async()=>{setError('');if(access==='owned'){location.assign('/coordinator');return;}try{const response=await post('/api/sandbox/lease');if(response.ok)location.assign('/coordinator');}catch(e){setAccess('busy');setError((e as Error).message);}};
+  const releaseSandbox=async()=>{setError('');try{await post('/api/sandbox/release');location.assign('/');}catch(e){setError((e as Error).message);}};
   const act=async(path:string,body:unknown={})=>{setError('');try{return await post(path,body);}catch(e){setError((e as Error).message);throw e;}};
   const submit=async(e:React.FormEvent)=>{e.preventDefault();if(!text.trim()||sending)return;setSending(true);
     try{const coordinatorPath=state?.mission?.id?'/api/agent':'/api/mission';const result=await act(volunteer?'/api/messages/B':coordinatorPath,volunteer?{body:text.trim(),operationId:crypto.randomUUID()}:{prompt:text.trim()});
@@ -90,9 +110,9 @@ function App(){
   const persistedConversation=mission?.id?[{id:mission.id+'-request',role:'user',content:mission.request,timestamp:firstMissionEvent},{id:mission.id+'-status',role:'assistant',content:missionStatus,timestamp:lastMissionEvent}]:[];
   const items=volunteer?state?.messages?.filter((message:any)=>message.actor==='B'):mission?.id?persistedConversation:[];
   const show=volunteer?'B':'A';
-  if(landing)return <Landing access={access} onStart={startSandbox}/>;
+  if(landing)return <Landing access={access} activeMissionId={activeMissionId} onStart={startSandbox}/>;
   if(access!=='owned')return <AccessPage kind={access} onStart={startSandbox}/>;
-  return <><header><a href="/sandbox" className="brand"><Mark/><span className="brand-copy"><strong>ReliefMesh</strong><small>AI-powered trusted mission coordination</small></span></a><span className="powered-by">Powered by Neuro MCP</span><nav aria-label="Main navigation"><a className={!setup&&!volunteer?'active':''} href="/sandbox">Coordinator</a><a className={volunteer?'active':''} href="/volunteer">Volunteer</a></nav><span className={'connection '+(live?'online':'')}>{live?'Live connection':'Reconnecting'}</span></header>
+  return <><header><a href="/coordinator" className="brand"><Mark/><span className="brand-copy"><strong>ReliefMesh</strong><small>AI-powered trusted mission coordination</small></span></a><span className="powered-by">Powered by Neuro MCP</span><nav aria-label="Main navigation"><a className={!setup&&!volunteer?'active':''} href="/coordinator">Coordinator</a><a className={volunteer?'active':''} href="/volunteer">Volunteer</a></nav><span className={'connection '+(live?'online':'')}>{live?'Live connection':'Reconnecting'}</span><button className="release-button" onClick={()=>void releaseSandbox()}>Release sandbox</button></header>
     <main>
       <div className="page-heading"><div><span className="eyebrow">LIVE SANDBOX / {setup?'SETUP & READINESS':volunteer?'VOLUNTEER WORKSPACE':'COORDINATOR WORKSPACE'}</span><h1>{setup?'Ready for trusted coordination.':volunteer?'Volunteer workspace':'Coordinator workspace'}</h1><p className="intro">{setup?'Reusable actors, identities, template and wallets for every mission.':volunteer?'Review real mission messages and agreements, then respond in your own words.':'Give the AI a mission. Neuro controls identity, consent, signatures and payment.'}</p></div>{state?.sandbox&&<div className="lease-summary"><strong>{state.sandbox.missionCount} / {state.sandbox.maxMissions} missions</strong><span>Up to {state.sandbox.maxReimbursement} TST each</span></div>}</div>
       {error&&<p role="alert" className="error">{error}</p>}
@@ -106,7 +126,7 @@ function App(){
       <div className="chat" aria-live="polite">{items?.length?items.map((m:any)=><article key={m.id} className={'bubble '+(volunteer?(m.direction==='outgoing'?'own':''):(m.role==='user'?'own':''))}><div className="bubble-meta"><strong>{volunteer?(m.direction==='outgoing'?'You · Volunteer':'Crisis Coordinator'):(m.role==='user'?'You':'ReliefMesh AI')}</strong><time>{clock(m.timestamp)}</time></div><p>{volunteer?m.body:m.content}</p>{volunteer&&<small>{m.direction==='incoming'?'Received through Neuro MCP':'Send accepted by Neuro-Ali'}</small>}</article>):<div className="empty"><div className="empty-icon">{volunteer?'↙':'↗'}</div><h3>{volunteer?'Ready for the first coordination request.':'What needs coordinating?'}</h3><p>{volunteer?'Incoming messages will appear here when Neuro-Ali receives them.':'Ask about availability, supplies, or transport. Every action uses the real participant connection.'}</p></div>}</div>
       {!volunteer&&!mission?.id&&<div className="suggestions">{examples.map((prompt,index)=><button className="suggestion" key={prompt} disabled={!state?.agent?.configured} onClick={()=>setText(prompt)}><span>{index+1}</span>{prompt}</button>)}</div>}
       <form className="composer" onSubmit={submit}><label className="sr-only" htmlFor="compose">{volunteer?'Reply to coordinator':mission?.id?'Ask the coordinator':'Give the AI a mission'}</label><textarea id="compose" maxLength={10000} value={text} onChange={e=>setText(e.target.value)} placeholder={volunteer?'Write your reply…':mission?.id?'Ask about this mission…':'Give the AI a mission…'} disabled={!live||(!volunteer&&!state?.agent?.configured)}/><div><span>{volunteer?'Your reply is sent through Neuro MCP.':mission?.id?'Mission actions use live Neuro MCP.':'Free text or an example starts a real mission.'}</span><button disabled={!live||!actorsReady||sending||!text.trim()||(!volunteer&&(!state?.agent?.configured||state.agent.busy))}>{sending?'Sending…':state?.agent?.busy&&!volunteer?'Working…':volunteer?'Send reply ↗':mission?.id?'Ask ReliefMesh':'Start mission'}</button></div></form></section>
-      <aside><MissionView mission={state?.mission} history={state?.missionHistory??[]} ready={live&&actorsReady&&!state?.pending?.length} volunteer={volunteer} act={act}/><section className="participant-card"><span className="eyebrow">PARTICIPANT NETWORK</span><div className="person"><div className="avatar">SV</div><div><h2>Solna Volunteer</h2><p>Human participant · Actor B</p></div></div><div className="fact"><span>Neuro-Ali MCP</span><strong>{b?.connected?'Connected':'Disconnected'}</strong></div><div className="fact"><span>Two-way test</span><strong>{isReady?'Passed':'Not proven'}</strong></div><div className="identity-note"><span className="tiny-dot"/><p>{state?.mission?.trust?'Verified for this mission':'Identity verification pending'}</p></div><a className="text-link" href={volunteer?'/sandbox':'/volunteer'}>{volunteer?'Open Coordinator workspace':'Open Volunteer workspace'} ↗</a></section>
+      <aside><MissionView mission={state?.mission} history={state?.missionHistory??[]} ready={live&&actorsReady&&!state?.pending?.length} volunteer={volunteer} act={act}/><section className="participant-card"><span className="eyebrow">PARTICIPANT NETWORK</span><div className="person"><div className="avatar">SV</div><div><h2>Solna Volunteer</h2><p>Human participant · Actor B</p></div></div><div className="fact"><span>Neuro-Ali MCP</span><strong>{b?.connected?'Connected':'Disconnected'}</strong></div><div className="fact"><span>Two-way test</span><strong>{isReady?'Passed':'Not proven'}</strong></div><div className="identity-note"><span className="tiny-dot"/><p>{state?.mission?.trust?'Verified for this mission':'Identity verification pending'}</p></div><a className="text-link" href={volunteer?'/coordinator':'/volunteer'}>{volunteer?'Open Coordinator workspace':'Open Volunteer workspace'} ↗</a></section>
       {latest&&!volunteer&&<section><span className="eyebrow">LATEST REAL REPLY</span><p className="reply-text">{latest.body}</p><small>Received through Actor A MCP · {clock(latest.timestamp)}</small></section>}
       </aside></div>}
       {setup&&<section className="activity"><div className="section-head"><div><span className="eyebrow">EVIDENCE, AS IT HAPPENS</span><h2>MCP activity</h2></div><span className="pill">{isReady?'Two-way MCP proven':'Awaiting proof'}</span></div><ol className="events">{state?.events?.slice(-12).reverse().map((e:any,i:number)=><li key={e.timestamp+i}><time>{clock(e.timestamp)}</time><strong>Actor {e.actor}</strong><span>{e.operation}</span><span className={'event-status '+(e.status==='success'?'good':'')}>{e.status}</span></li>)}</ol><details><summary>Technical proof <span>Open architecture & checks ↗</span></summary><div className="proof"><p>User → AI Agent → official MCP client → Neuro-Ali STDIO → Neuro</p><div className="proof-grid">{Object.entries(state?.proof??{}).filter(([key])=>key!=='correlation'&&key!=='status').map(([key,value])=><div key={key}><span>{key}</span><strong>{String(value)}</strong></div>)}<div><span>AI_AGENT_REAL_MCP_CALL</span><strong>{state?.agent?.realMcpCalls>0?'Executed — see activity':'Not yet proven'}</strong></div></div><p className="muted">No Agent API calls. No simulated Neuro results. Model text is separate from MCP evidence.</p></div></details></section>}
