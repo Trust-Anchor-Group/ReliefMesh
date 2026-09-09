@@ -40,7 +40,7 @@ export function neuroElicitationTarget(method:string,originalUrl:string,routing:
 }
 
 function upstreamHeaders(headers:IncomingHttpHeaders,port:number,path:string){
-  const result:IncomingHttpHeaders={...headers,host:'127.0.0.1:'+port};
+  const result:IncomingHttpHeaders={...headers,host:'localhost:'+port};
   for(const name of [...hopByHopHeaders,'x-forwarded-for','x-forwarded-host','x-forwarded-proto'] as (keyof IncomingHttpHeaders)[])delete result[name];
   if(result.origin)result.origin='http://localhost:'+port;
   if(result.referer)result.referer='http://localhost:'+port+path;
@@ -53,7 +53,7 @@ export function neuroElicitationProxy(routing:ElicitationRouting):RequestHandler
     if(!req.originalUrl.startsWith('/neuro/')){next();return;}
     const target=neuroElicitationTarget(req.method,req.originalUrl,routing);
     if(!target){res.sendStatus(404);return;}
-    if(req.headers.host!==publicUrl.host||(req.headers.origin&&req.headers.origin!==publicUrl.origin)){res.sendStatus(403);return;}
+    if(req.headers.host!==publicUrl.host||(req.headers.origin&&req.headers.origin!==publicUrl.origin&&req.headers.origin!=='null')){res.sendStatus(403);return;}
 
     let upstream;
     try{
