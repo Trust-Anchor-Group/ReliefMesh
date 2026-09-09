@@ -176,9 +176,11 @@ export class NeuroActor extends EventEmitter {
 
   private restartDelay(milliseconds:number){
     return new Promise<void>(resolve=>{
-      const timer=setTimeout(resolve,milliseconds);
+      let timer:NodeJS.Timeout;
+      const stop=()=>{clearTimeout(timer);resolve();};
+      timer=setTimeout(()=>{this.off('stop',stop);resolve();},milliseconds);
       timer.unref?.();
-      this.once('stop',()=>{clearTimeout(timer);resolve();});
+      this.once('stop',stop);
     });
   }
 

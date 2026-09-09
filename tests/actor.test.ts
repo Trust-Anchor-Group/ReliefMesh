@@ -124,6 +124,7 @@ test('retries use bounded exponential backoff',async()=>{
   const gaps=harness.controls.slice(1).map((control,index)=>control.startedAt-harness.controls[index].startedAt);
   assert.ok(gaps[0]>=8&&gaps[1]>=18&&gaps[2]>=35&&gaps[3]>=35,String(gaps));
   assert.ok(gaps.every(gap=>gap<100),String(gaps));
+  assert.equal(harness.actor.listenerCount('stop'),0);
   await harness.actor.close();
 });
 
