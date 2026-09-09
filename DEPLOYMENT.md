@@ -118,6 +118,8 @@ The runtime must stay persistent across restarts because it contains operation g
 
 Terminate TLS at the reverse proxy and forward to `http://127.0.0.1:4317` without rewriting the `Host` header. WebSocket support is not required; `/api/events` uses server-sent events, so disable response buffering for that route. Set a proxy read timeout longer than 30 minutes.
 
+Forward `/neuro/*` unchanged through the same loopback upstream. ReliefMesh accepts only `GET` and `POST` on `/neuro/coordinator/MCP/<opaque>` and `/neuro/volunteer/MCP/<opaque>`, maps them to the matching private actor, and rejects all other Neuro paths. Do not include these capability URLs in access logs; if proxy access logging is required, redact the path segment after `/MCP/`.
+
 Only expose the HTTPS origin. Port `4317`, Neuro-Ali callback ports `52482` and `52483`, all data directories, and the Neuro-Ali application directory remain private to the host. `RELIEFMESH_PUBLIC_ORIGIN` must exactly match the browser origin or host/origin validation will reject requests.
 
 ## Health and operation

@@ -12,6 +12,7 @@ import { neuroResult } from './result.js';
 import { Messaging, validateNetwork } from './messaging.js';
 import {config,runtimeDir,runtimePath} from './config.js';
 import {cookieValue,expiredSandboxCookie,isSandboxLeaseState,SANDBOX_MAX_MISSIONS,SANDBOX_MAX_REIMBURSEMENT_TST,sandboxCookie,SandboxLeaseManager,type SandboxLeaseState} from './sandbox.js';
+import {neuroElicitationProxy,publicElicitationUrl} from './elicitation.js';
 
 const app = express();
 const port = config.port;
@@ -48,11 +49,17 @@ function saveLease(){
 if(onboarding.credentialsConfirmed) readiness.B='XMPP operation succeeded; identity approval not verified';
 if(onboarding.stage==='readiness-confirmed')readiness.B='Post-approval MCP readiness confirmed';
 const operations = new Map<string,{actor:ActorId;name:string;status:string}>();
-function safeInteraction(params:ElicitRequestParams):ElicitRequestParams {
+const elicitationRouting={publicOrigin:origin,ports:{A:config.neuroPortA,B:config.neuroPortB}};
+function safeInteraction(actor:ActorId,params:ElicitRequestParams):ElicitRequestParams {
  let message=params.message;
  if(message.startsWith('A petition for one of your Legal Identities ('))message='ReliefMesh Crisis Coordination is requesting access to your verified identity for this assignment. Review the secure form and choose whether to disclose your identity.';
  else if(message.startsWith('A Legal Identity you petitioned ('))message='The requested identity response has arrived through Neuro. Acknowledge the secure response to complete the trust check.';
- return {...params,message};
+ const safe={...params,message} as ElicitRequestParams&{url?:string};
+ if(params.mode==='url'){
+   const url=publicElicitationUrl(actor,params.url,elicitationRouting);
+   if(url)safe.url=url;else delete safe.url;
+ }
+ return safe;
 }
 function snapshot() {
   const missionState=mission.snapshot as any;
@@ -64,7 +71,7 @@ function snapshot() {
   const templateApproved=missionState.templates?.some((template:any)=>template.id==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io'&&template.state==='Approved'&&template.template===true)||mission.historySnapshot.some(entry=>entry.templateId==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io');
   return {mission:missionState,missionHistory:visibleHistory,sandbox:lease?{createdAt:lease.createdAt,expiresAt:lease.activityExpiresAt,activityExpiresAt:lease.activityExpiresAt,ownerExpiresAt:lease.ownerExpiresAt,lastActivity:lease.lastActivity,missionCount:lease.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:undefined,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,state:a.state,connected:a.connected,tools:a.tools.length,attempt:a.attempt,lastTransition:a.lastTransition,lastFailureClass:a.lastFailureClass,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
-    pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params:safeInteraction(params)})),
+    pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params:safeInteraction(actor,params)})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
 }
 function broadcast() {
@@ -119,6 +126,7 @@ app.get('/health',(_req,res)=>{
   const ready=runtimeReady(actors,!!messaging.network,agent.status.configured);
   res.json({status:ready?'ok':'degraded',service:'reliefmesh',ready});
 });
+app.use(neuroElicitationProxy(elicitationRouting));
 app.use((req,res,next)=>{
   const allowedOrigins=new Set([origin,'http://localhost:'+port,'http://127.0.0.1:'+port]);
   const allowedHosts=new Set([...allowedOrigins].map(value=>new URL(value).host));

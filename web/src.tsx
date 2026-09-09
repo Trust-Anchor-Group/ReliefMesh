@@ -15,6 +15,15 @@ async function post(path:string,body:unknown={}) {
 }
 const clock=(value:string)=>new Date(value).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 const shortId=(value?:string)=>value?value.length>20?value.slice(0,8)+'...'+value.slice(-8):value:'Not available';
+function publicElicitationUrl(actor:'A'|'B',value:unknown){
+  if(typeof value!=='string')return undefined;
+  const port=actor==='A'?'52482':'52483';
+  const role=actor==='A'?'coordinator':'volunteer';
+  const internal=new RegExp('^http://(?:localhost|127\\.0\\.0\\.1):'+port+'(/MCP/[^/?#]+)(\\?[^#]*)?$').exec(value);
+  if(internal)return location.origin+'/neuro/'+role+internal[1]+(internal[2]??'');
+  const prefix=location.origin+'/neuro/'+role;
+  return value.startsWith(prefix+'/MCP/')&&/^\/MCP\/[^/?#]+(?:\?[^#]*)?$/.test(value.slice(prefix.length))?value:undefined;
+}
 function Mark(){return <svg width="29" height="29" viewBox="0 0 29 29" fill="none" aria-hidden="true"><path d="M5 6h8v8H5zM16 6h8v8h-8zM5 17h8v8H5zM16 17h8v8h-8z" fill="currentColor"/><path d="M12 9h6M9 12v7M20 12v7M12 21h6" stroke="currentColor" strokeWidth="2"/></svg>}
 function Landing({access,activeMissionId,onStart}:{access:'loading'|'available'|'busy'|'owned';activeMissionId?:string;onStart:()=>void}){
   const busy=access==='busy';
@@ -36,11 +45,11 @@ function Interaction({item,mission,onError}:{item:any;mission:any;onError:(s:str
     try{await post('/api/elicitation/'+item.id,{action,...(p.mode!=='url'?{content}:{})});}
     catch(e){onError((e as Error).message);setBusy(false);}
   };
-  let safeUrl=false;try{const u=new URL(p.url);safeUrl=u.protocol==='https:' || (u.protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(u.hostname));}catch{}
-  if(proposal){const value=(name:string)=>mission.contract.parameters?.find((parameter:any)=>parameter.Name===name)?.Value;const deadline=value('Deadline');return <section className="approval-card volunteer-approval"><span className="eyebrow">VOLUNTEER APPROVAL REQUIRED</span><h2>Review the mission agreement</h2><dl className="agreement-facts"><div><dt>Mission</dt><dd>{mission.request}</dd></div><div><dt>Quantity / item</dt><dd>{value('Quantity')} {value('Item')}</dd></div><div><dt>Destination</dt><dd>{value('Destination')}</dd></div><div><dt>Deadline</dt><dd>{deadline?contractDate(deadline).toLocaleString([],{dateStyle:'medium',timeStyle:'short'}):'Defined in the agreement'}</dd></div><div><dt>Reimbursement</dt><dd>{mission.amount} {mission.currency}</dd></div><div><dt>Volunteer</dt><dd><span className="verified-mark">✓</span> Verified Volunteer</dd></div><div><dt>Contract ID</dt><dd title={mission.contract.id}>{shortId(mission.contract.id)}</dd></div></dl><div className="approval-footer"><p>Signing records your explicit consent in Neuro.</p>{p.mode==='url'?(safeUrl?<><a className="button" href={p.url} target="_blank" rel="noreferrer">Open secure Neuro signing form ↗</a><button disabled={busy} onClick={()=>respond('accept')}>I completed signing</button></>:<p>Neuro returned an unsupported signing URL. Cancel this request.</p>):<button disabled={busy} onClick={()=>respond('accept',{Accept:true})}>Sign as Volunteer</button>}</div></section>}
+  const interactionUrl=p.mode==='url'?publicElicitationUrl(item.actor,p.url):undefined;
+  if(proposal){const value=(name:string)=>mission.contract.parameters?.find((parameter:any)=>parameter.Name===name)?.Value;const deadline=value('Deadline');return <section className="approval-card volunteer-approval"><span className="eyebrow">VOLUNTEER APPROVAL REQUIRED</span><h2>Review the mission agreement</h2><dl className="agreement-facts"><div><dt>Mission</dt><dd>{mission.request}</dd></div><div><dt>Quantity / item</dt><dd>{value('Quantity')} {value('Item')}</dd></div><div><dt>Destination</dt><dd>{value('Destination')}</dd></div><div><dt>Deadline</dt><dd>{deadline?contractDate(deadline).toLocaleString([],{dateStyle:'medium',timeStyle:'short'}):'Defined in the agreement'}</dd></div><div><dt>Reimbursement</dt><dd>{mission.amount} {mission.currency}</dd></div><div><dt>Volunteer</dt><dd><span className="verified-mark">✓</span> Verified Volunteer</dd></div><div><dt>Contract ID</dt><dd title={mission.contract.id}>{shortId(mission.contract.id)}</dd></div></dl><div className="approval-footer"><p>Signing records your explicit consent in Neuro.</p>{p.mode==='url'?(interactionUrl?<><a className="button" href={interactionUrl} target="_blank" rel="noreferrer">Open secure Neuro signing form ↗</a><button disabled={busy} onClick={()=>respond('accept')}>I completed signing</button></>:<p>Neuro returned an unsupported signing URL. Cancel this request.</p>):<button disabled={busy} onClick={()=>respond('accept',{Accept:true})}>Sign as Volunteer</button>}</div></section>}
   return <section className="action"><span className="eyebrow">ACTION REQUIRED · ACTOR {item.actor}</span><h2>Continue the secure interaction</h2><p className="preline">{p.message}</p>
     {p.mode==='url'?<><p>Complete this request in Neuro’s hosted form. Keep ReliefMesh running.</p>
-      {safeUrl?<a className="button" href={p.url} target="_blank" rel="noreferrer">Open secure Neuro form ↗</a>:<p>Unsupported URL. Cancel this request.</p>}
+      {interactionUrl?<a className="button" href={interactionUrl} target="_blank" rel="noreferrer">Open secure Neuro form ↗</a>:<p>Unsupported URL. Cancel this request.</p>}
       <p className="muted">Acknowledge below after completing the hosted form if this request is still waiting.</p></>:
       <form onSubmit={e=>{e.preventDefault();void respond('accept');}}>{fields.map(([key,s])=>{
         const options=s.enum?.map((v:string)=>({value:v,title:v}))??s.oneOf?.map((v:any)=>({value:v.const,title:v.title??v.const}));
@@ -50,7 +59,7 @@ function Interaction({item,mission,onError}:{item:any;mission:any;onError:(s:str
         s.type==='array'&&s.items?.enum?<select multiple value={(values[key]??[]) as string[]} onChange={e=>setValues({...values,[key]:Array.from(e.target.selectedOptions,o=>o.value)})}>{s.items.enum.map((v:string)=><option key={v}>{v}</option>)}</select>:
         ['string','number','integer'].includes(s.type)?<input type={s.type==='string'?'text':'number'} required={p.requestedSchema.required?.includes(key)} minLength={s.minLength} maxLength={s.maxLength} min={s.minimum} max={s.maximum} step={s.type==='integer'?1:'any'} value={String(values[key]??'')} onChange={e=>setValues({...values,[key]:s.type==='string'?e.target.value:Number(e.target.value)})}/>:<p>Unsupported field type. Please cancel.</p>}</label>;
       })}<button disabled={busy||unsupported}>Accept reviewed form</button></form>}
-    <div className="buttons">{p.mode==='url'&&<button disabled={busy||!safeUrl} onClick={()=>respond('accept')}>I completed the secure form</button>}<button className="secondary" disabled={busy} onClick={()=>respond('decline')}>Decline</button><button className="secondary" disabled={busy} onClick={()=>respond('cancel')}>Cancel</button></div>
+    <div className="buttons">{p.mode==='url'&&<button disabled={busy||!interactionUrl} onClick={()=>respond('accept')}>I completed the secure form</button>}<button className="secondary" disabled={busy} onClick={()=>respond('decline')}>Decline</button><button className="secondary" disabled={busy} onClick={()=>respond('cancel')}>Cancel</button></div>
   </section>;
 }
 function App(){
