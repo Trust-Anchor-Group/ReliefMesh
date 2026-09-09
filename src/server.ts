@@ -7,7 +7,7 @@ import { mkdir, writeFile, readFile, rename, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Ajv } from 'ajv';
 import type { ElicitRequestParams, ElicitResult } from '@modelcontextprotocol/client';
-import { NeuroActor, type ActorId } from './actor.js';
+import { NeuroActor, runtimeReady, type ActorId } from './actor.js';
 import { neuroResult } from './result.js';
 import { Messaging, validateNetwork } from './messaging.js';
 import {config,runtimeDir,runtimePath} from './config.js';
@@ -62,7 +62,7 @@ function snapshot() {
   const coordinatorBalance=missionState.balances?.A??latestHistory?.balancesAfter?.A;
   const identitiesReady=(missionState.identityReadiness?.A&&missionState.identityReadiness?.B)||mission.historySnapshot.length>0;
   const templateApproved=missionState.templates?.some((template:any)=>template.id==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io'&&template.state==='Approved'&&template.template===true)||mission.historySnapshot.some(entry=>entry.templateId==='323064dd-0e43-4f7b-6833-3d05e10bb267@legal.lab.tagroot.io');
-  return {mission:missionState,missionHistory:visibleHistory,sandbox:lease?{createdAt:lease.createdAt,expiresAt:lease.activityExpiresAt,activityExpiresAt:lease.activityExpiresAt,ownerExpiresAt:lease.ownerExpiresAt,lastActivity:lease.lastActivity,missionCount:lease.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:undefined,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,connected:a.connected,tools:a.tools.length,
+  return {mission:missionState,missionHistory:visibleHistory,sandbox:lease?{createdAt:lease.createdAt,expiresAt:lease.activityExpiresAt,activityExpiresAt:lease.activityExpiresAt,ownerExpiresAt:lease.ownerExpiresAt,lastActivity:lease.lastActivity,missionCount:lease.missionCount,maxMissions:SANDBOX_MAX_MISSIONS,maxReimbursement:SANDBOX_MAX_REIMBURSEMENT_TST}:undefined,readinessSummary:{identitiesReady,templateApproved,coordinatorBalance},onboarding:{...onboarding,legalId:undefined},trust,agent:agent.status,conversation:agent.conversation,networkConfigured:!!messaging.network,messages:messaging.messages,proof:messaging.proof,actors:Object.values(actors).map(a=>({id:a.id,state:a.state,connected:a.connected,tools:a.tools.length,attempt:a.attempt,lastTransition:a.lastTransition,lastFailureClass:a.lastFailureClass,
     requiredTools:required.every(n=>a.tools.some(t=>t.name===n)),busy:a.busy,readiness:readiness[a.id]})),
     pending:[...pending.values()].map(({id,actor,params})=>({id,actor,params:safeInteraction(params)})),
     operations:[...operations.entries()].map(([id,value])=>({id,...value})),events};
@@ -109,11 +109,16 @@ const mission=new Mission(actors,messaging,broadcast);
 await mission.load();
 const required=['SendChatMessage','GetMessage','PopMessage','PetitionLegalIdentity'];
 for(const actor of Object.values(actors)) actor.on('activity',event=>{
-  events.push(event); if(events.length>200) events.shift(); broadcast();
+  events.push(event); if(events.length>200) events.shift();
+  if(event.operation==='MCP connected'&&event.status==='success')void writeFile(runtimePath('tools-'+actor.id+'.json'),JSON.stringify(actor.tools,null,2)).catch(()=>{});
+  broadcast();
 });
 app.disable('x-powered-by');
 app.set('trust proxy',process.env.RELIEFMESH_TRUST_PROXY==='1'?1:false);
-app.get('/health',(_req,res)=>res.json({status:Object.values(actors).every(actor=>actor.connected)?'ok':'degraded',service:'reliefmesh',ready:Object.values(actors).every(actor=>actor.connected)}));
+app.get('/health',(_req,res)=>{
+  const ready=runtimeReady(actors,!!messaging.network,agent.status.configured);
+  res.json({status:ready?'ok':'degraded',service:'reliefmesh',ready});
+});
 app.use((req,res,next)=>{
   const allowedOrigins=new Set([origin,'http://localhost:'+port,'http://127.0.0.1:'+port]);
   const allowedHosts=new Set([...allowedOrigins].map(value=>new URL(value).host));
@@ -409,14 +414,8 @@ app.get(config.publicSandbox?['/','/sandbox','/coordinator','/volunteer']:['/','
 app.use((_err:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>res.status(400).json({error:'Request failed'}));
 const server=app.listen(port,config.host,()=>console.log('ReliefMesh: '+origin+(config.publicSandbox?'/':'/setup')));
 for(const actor of Object.values(actors)) {
-  try {
-    await actor.connect();
-    await mkdir(runtimeDir,{recursive:true});
-    await writeFile(runtimePath('tools-'+actor.id+'.json'),JSON.stringify(actor.tools,null,2));
-    console.log('ACTOR_'+actor.id+'_MCP=PASS ACTOR_'+actor.id+'_TOOLS='+actor.tools.length);
-  } catch {console.log('ACTOR_'+actor.id+'_MCP=FAIL');}
+  actor.start();
 }
-await mission.recoverDiscovery().catch(()=>false);
 broadcast();
 const polling=setInterval(()=>{
   if(agent.busy || mission.busy || !messaging.network)return;
