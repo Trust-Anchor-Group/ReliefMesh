@@ -6,6 +6,8 @@ import { EventEmitter } from 'node:events';
 export type ActorId = 'A' | 'B';
 export type ActorState='STOPPED'|'STARTING'|'MCP_CONNECTING'|'READY'|'DEGRADED'|'RESTART_WAIT';
 export type ActorFailureClass='process never started'|'process exited'|'persistence initialization'|'FILES_DB_SALT'|'XMPP login'|'session recovery'|'MCP initialize'|'tools/list'|'resources/list'|'callback/listener'|'timeout'|'unknown';
+export type ResourceCacheInvalidationSource='list_changed'|'message_not_found'|'reconnect'|'ttl_expired';
+export type ResourceDiscoveryReason='connect'|ResourceCacheInvalidationSource|'explicit';
 export const EXPECTED_NEURO_TOOLS=68;
 
 type ActorSession={client:Client;transport:StdioClientTransport};
@@ -48,6 +50,9 @@ export class NeuroActor extends EventEmitter {
   private messageUris?:string[];
   private messageUrisAt=0;
   private resourceGeneration=0;
+  private lastResourceDiscoveryAt?:number;
+  private lastResourceInvalidationAt?:number;
+  private pendingResourceInvalidations:ResourceCacheInvalidationSource[]=[];
   tools: Tool[] = [];
   connected = false;
   busy?: string;
@@ -87,8 +92,27 @@ export class NeuroActor extends EventEmitter {
     this.activity('supervisor',state.toLowerCase());
   }
 
-  private activity(operation: string, status: string) {
-    this.emit('activity', {actor:this.id, operation, status, timestamp:new Date().toISOString()});
+  private activity(operation: string, status: string, details:Record<string,unknown>={}) {
+    this.emit('activity', {actor:this.id, operation, status, timestamp:new Date().toISOString(),...details});
+  }
+
+  private cacheActivityDetails(now:number,cachedResourceCount=this.messageUris?.length??0){
+    return {
+      cachedResourceCount,
+      processGeneration:this.attempt,
+      pid:this.transport?.pid??null,
+      cacheGeneration:this.resourceGeneration,
+      msSincePreviousDiscovery:this.lastResourceDiscoveryAt===undefined?null:now-this.lastResourceDiscoveryAt,
+      msSincePreviousInvalidation:this.lastResourceInvalidationAt===undefined?null:now-this.lastResourceInvalidationAt
+    };
+  }
+
+  private recordResourceInvalidation(source:ResourceCacheInvalidationSource,affectedResourceId?:string,cachedResourceCount=this.messageUris?.length??0){
+    const now=Date.now();
+    const details=this.cacheActivityDetails(now,cachedResourceCount);
+    this.lastResourceInvalidationAt=now;
+    this.pendingResourceInvalidations.push(source);
+    this.activity('resource_cache_invalidation',source,{source,affectedResourceId:affectedResourceId??null,...details});
   }
 
   start(){
@@ -108,9 +132,11 @@ export class NeuroActor extends EventEmitter {
     while(!this.stopRequested){
       this.attempt++;
       this.transition('STARTING');
-      this.messageUris=undefined;
-      this.messageUrisAt=0;
-      this.resourceGeneration++;
+      if(this.attempt===1){
+        this.messageUris=undefined;
+        this.messageUrisAt=0;
+        this.resourceGeneration++;
+      }else this.invalidateMessageResources('reconnect');
       let failure:ActorFailureClass|undefined;
       let active=true;
       let fail:(failure:ActorFailureClass)=>void=()=>{};
@@ -129,7 +155,7 @@ export class NeuroActor extends EventEmitter {
         this.client.setRequestHandler('elicitation/create', (request, context) =>
           this.elicit(this.id, request.params, context.mcpReq.signal));
         this.client.setNotificationHandler('notifications/resources/list_changed',()=>{
-          if(this.client===session.client)this.invalidateMessageResources();
+          if(this.client===session.client)this.invalidateMessageResources('list_changed');
         });
         this.client.onclose=()=>fail(this.connected?'process exited':'MCP initialize');
         this.client.onerror=()=>fail(this.connected?'callback/listener':'MCP initialize');
@@ -141,7 +167,7 @@ export class NeuroActor extends EventEmitter {
         if(tools.length!==this.expectedTools)throw new ActorStartupError('tools/list');
         try{
           const generation=this.resourceGeneration;
-          this.cacheMessageResources(await this.fetchResources(this.client,'connect'),this.client,generation);
+          this.cacheMessageResources(await this.fetchResources(this.client,this.attempt===1?'connect':'reconnect'),this.client,generation);
         }catch{throw new ActorStartupError('resources/list');}
         this.tools=tools;
         this.connected=true;
@@ -217,8 +243,14 @@ export class NeuroActor extends EventEmitter {
   private requireClient(){if(!this.connected||!this.client)throw new Error('Actor disconnected');return this.client;}
 
   async listTools() {return this.enqueue(()=>this.fetchTools(this.requireClient()));}
-  private async fetchResources(client:Client,reason:'connect'|'change-or-ttl'|'explicit'){
-    this.activity('resources/list',reason);
+  private async fetchResources(client:Client,reason:ResourceDiscoveryReason){
+    const now=Date.now();
+    this.activity('resources/list',reason,{
+      reason,
+      ...this.cacheActivityDetails(now),
+      invalidationSources:[...this.pendingResourceInvalidations]
+    });
+    this.lastResourceDiscoveryAt=now;
     const resources:Resource[]=[];let cursor:string|undefined;const seen=new Set<string>();
     do {const page=await client.listResources(cursor?{cursor}:undefined,{timeout:30_000,maxTotalTimeout:30_000});resources.push(...page.resources);cursor=page.nextCursor;
       if(cursor&&seen.has(cursor))throw new Error('Repeated resources cursor');if(cursor)seen.add(cursor);
@@ -229,15 +261,23 @@ export class NeuroActor extends EventEmitter {
     if(this.client!==client||this.resourceGeneration!==generation)return;
     this.messageUris=resources.filter(resource=>resource.uri.startsWith('mid:')).map(resource=>resource.uri);
     this.messageUrisAt=Date.now();
+    this.pendingResourceInvalidations=[];
   }
-  invalidateMessageResources(){this.resourceGeneration++;this.messageUrisAt=0;}
+  invalidateMessageResources(source:'list_changed'|'message_not_found'|'reconnect',affectedResourceId?:string){
+    const cachedResourceCount=this.messageUris?.length??0;
+    this.resourceGeneration++;
+    this.messageUrisAt=0;
+    if(source==='reconnect')this.messageUris=undefined;
+    this.recordResourceInvalidation(source,affectedResourceId,cachedResourceCount);
+  }
   async messageResourceUris(){
     return this.enqueue(async()=>{
       const client=this.requireClient();
       if(this.messageUris&&Date.now()-this.messageUrisAt<this.resourceCacheTtlMs)return [...this.messageUris];
+      if(this.pendingResourceInvalidations.length===0)this.recordResourceInvalidation('ttl_expired');
       const generation=this.resourceGeneration;
       try{
-        const resources=await this.fetchResources(client,'change-or-ttl');
+        const resources=await this.fetchResources(client,this.pendingResourceInvalidations.at(-1)!);
         this.cacheMessageResources(resources,client,generation);
         return resources.filter(resource=>resource.uri.startsWith('mid:')).map(resource=>resource.uri);
       }catch(error){this.observeSessionFailure(error,client);throw error;}

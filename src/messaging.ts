@@ -39,7 +39,7 @@ export class Messaging {
         const value=neuroResult(result);
         if(value.Message==='Message not found.'){
           this.seen[id].add(uri);
-          this.actors[id].invalidateMessageResources();
+          this.actors[id].invalidateMessageResources('message_not_found',uri);
         }
         if(result.isError||value.Success!==true)continue;
         this.seen[id].add(uri);

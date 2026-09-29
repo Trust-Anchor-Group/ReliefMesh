@@ -117,6 +117,8 @@ await mission.load();
 const required=['SendChatMessage','GetMessage','PopMessage','PetitionLegalIdentity'];
 for(const actor of Object.values(actors)) actor.on('activity',event=>{
   events.push(event); if(events.length>200) events.shift();
+  if(event.operation==='resource_cache_invalidation'||event.operation==='resources/list')
+    console.log(JSON.stringify({type:event.operation==='resources/list'?'resource_discovery':'resource_cache_invalidation',...event}));
   if(event.operation==='MCP connected'&&event.status==='success')void writeFile(runtimePath('tools-'+actor.id+'.json'),JSON.stringify(actor.tools,null,2)).catch(()=>{});
   broadcast();
 });
