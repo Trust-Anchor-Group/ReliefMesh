@@ -29,23 +29,24 @@ export class Messaging {
     if(!validateNetwork(n))throw new Error('Provide distinct bare XMPP addresses');
     await writeFile(runtimePath('network.json'),JSON.stringify(n));this.network=n;this.changed();
   }
-  async resources(id:ActorId){
-    return this.actors[id].listResources();
-  }
   async receive(id:ActorId){
     if(!this.network||this.scanning[id]||this.actors[id].busy)return;
     this.scanning[id]=true;
     try{
-      for(const r of await this.resources(id)){
-        if(!r.uri.startsWith('mid:')||this.seen[id].has(r.uri))continue;
-        const result=await this.actors[id].callTool('GetMessage',{MessageId:r.uri,Remove:false});
+      for(const uri of await this.actors[id].messageResourceUris()){
+        if(this.seen[id].has(uri))continue;
+        const result=await this.actors[id].callTool('GetMessage',{MessageId:uri,Remove:false});
         const value=neuroResult(result);
+        if(value.Message==='Message not found.'){
+          this.seen[id].add(uri);
+          this.actors[id].invalidateMessageResources();
+        }
         if(result.isError||value.Success!==true)continue;
-        this.seen[id].add(r.uri);
+        this.seen[id].add(uri);
         const peer=id==='A'?'B':'A';
         // Ignore unrelated messages, preserving them on Neuro-Ali.
         if(typeof value.FromBareJid!=='string'||value.FromBareJid.toLowerCase()!==this.network[peer].toLowerCase()||typeof value.Body!=='string'||value.ErrorMessage===true)continue;
-        this.messages.push({id:r.uri,actor:id,direction:'incoming',body:value.Body,timestamp:new Date().toISOString()});
+        this.messages.push({id:uri,actor:id,direction:'incoming',body:value.Body,timestamp:new Date().toISOString()});
         if(this.messages.length>200)this.messages.shift();this.changed();
       }
     }finally{this.scanning[id]=false;}

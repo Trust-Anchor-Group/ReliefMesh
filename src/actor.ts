@@ -1,11 +1,11 @@
-﻿import { Client, type Tool, type ElicitRequestParams, type ElicitResult } from '@modelcontextprotocol/client';
+﻿import { Client, type Tool, type Resource, type ElicitRequestParams, type ElicitResult } from '@modelcontextprotocol/client';
 import {getDefaultEnvironment,StdioClientTransport} from '@modelcontextprotocol/client/stdio';
 import { neuroResult } from './result.js';
 import { EventEmitter } from 'node:events';
 
 export type ActorId = 'A' | 'B';
 export type ActorState='STOPPED'|'STARTING'|'MCP_CONNECTING'|'READY'|'DEGRADED'|'RESTART_WAIT';
-export type ActorFailureClass='process never started'|'process exited'|'persistence initialization'|'FILES_DB_SALT'|'XMPP login'|'session recovery'|'MCP initialize'|'tools/list'|'callback/listener'|'timeout'|'unknown';
+export type ActorFailureClass='process never started'|'process exited'|'persistence initialization'|'FILES_DB_SALT'|'XMPP login'|'session recovery'|'MCP initialize'|'tools/list'|'resources/list'|'callback/listener'|'timeout'|'unknown';
 export const EXPECTED_NEURO_TOOLS=68;
 
 type ActorSession={client:Client;transport:StdioClientTransport};
@@ -14,6 +14,7 @@ export type SupervisorOptions={
   startupTimeoutMs?:number;
   stableReadyMs?:number;
   heartbeatMs?:number;
+  resourceCacheTtlMs?:number;
   initialBackoffMs?:number;
   maxBackoffMs?:number;
   createSession?:(actor:NeuroActor)=>ActorSession;
@@ -40,9 +41,13 @@ export class NeuroActor extends EventEmitter {
   private readonly startupTimeoutMs:number;
   private readonly stableReadyMs:number;
   private readonly heartbeatMs:number;
+  private readonly resourceCacheTtlMs:number;
   private readonly initialBackoffMs:number;
   private readonly maxBackoffMs:number;
   private readonly createSession:(actor:NeuroActor)=>ActorSession;
+  private messageUris?:string[];
+  private messageUrisAt=0;
+  private resourceGeneration=0;
   tools: Tool[] = [];
   connected = false;
   busy?: string;
@@ -58,6 +63,7 @@ export class NeuroActor extends EventEmitter {
     this.startupTimeoutMs=options.startupTimeoutMs??60_000;
     this.stableReadyMs=options.stableReadyMs??60_000;
     this.heartbeatMs=options.heartbeatMs??30_000;
+    this.resourceCacheTtlMs=options.resourceCacheTtlMs??300_000;
     this.initialBackoffMs=options.initialBackoffMs??1_000;
     this.maxBackoffMs=options.maxBackoffMs??30_000;
     this.createSession=options.createSession??(actor=>actor.defaultSession());
@@ -102,6 +108,9 @@ export class NeuroActor extends EventEmitter {
     while(!this.stopRequested){
       this.attempt++;
       this.transition('STARTING');
+      this.messageUris=undefined;
+      this.messageUrisAt=0;
+      this.resourceGeneration++;
       let failure:ActorFailureClass|undefined;
       let active=true;
       let fail:(failure:ActorFailureClass)=>void=()=>{};
@@ -119,6 +128,9 @@ export class NeuroActor extends EventEmitter {
         this.transport.stderr?.on('data',()=>{});
         this.client.setRequestHandler('elicitation/create', (request, context) =>
           this.elicit(this.id, request.params, context.mcpReq.signal));
+        this.client.setNotificationHandler('notifications/resources/list_changed',()=>{
+          if(this.client===session.client)this.invalidateMessageResources();
+        });
         this.client.onclose=()=>fail(this.connected?'process exited':'MCP initialize');
         this.client.onerror=()=>fail(this.connected?'callback/listener':'MCP initialize');
         this.transition('MCP_CONNECTING');
@@ -127,6 +139,10 @@ export class NeuroActor extends EventEmitter {
         try{tools=await this.fetchTools(this.client);}
         catch{throw new ActorStartupError('tools/list');}
         if(tools.length!==this.expectedTools)throw new ActorStartupError('tools/list');
+        try{
+          const generation=this.resourceGeneration;
+          this.cacheMessageResources(await this.fetchResources(this.client,'connect'),this.client,generation);
+        }catch{throw new ActorStartupError('resources/list');}
         this.tools=tools;
         this.connected=true;
         this.transition('READY');
@@ -201,17 +217,37 @@ export class NeuroActor extends EventEmitter {
   private requireClient(){if(!this.connected||!this.client)throw new Error('Actor disconnected');return this.client;}
 
   async listTools() {return this.enqueue(()=>this.fetchTools(this.requireClient()));}
-  async listResources() {
+  private async fetchResources(client:Client,reason:'connect'|'change-or-ttl'|'explicit'){
+    this.activity('resources/list',reason);
+    const resources:Resource[]=[];let cursor:string|undefined;const seen=new Set<string>();
+    do {const page=await client.listResources(cursor?{cursor}:undefined,{timeout:30_000,maxTotalTimeout:30_000});resources.push(...page.resources);cursor=page.nextCursor;
+      if(cursor&&seen.has(cursor))throw new Error('Repeated resources cursor');if(cursor)seen.add(cursor);
+    }while(cursor);
+    return resources;
+  }
+  private cacheMessageResources(resources:Resource[],client:Client,generation:number){
+    if(this.client!==client||this.resourceGeneration!==generation)return;
+    this.messageUris=resources.filter(resource=>resource.uri.startsWith('mid:')).map(resource=>resource.uri);
+    this.messageUrisAt=Date.now();
+  }
+  invalidateMessageResources(){this.resourceGeneration++;this.messageUrisAt=0;}
+  async messageResourceUris(){
     return this.enqueue(async()=>{
       const client=this.requireClient();
-      const resources=[];let cursor:string|undefined;const seen=new Set<string>();
+      if(this.messageUris&&Date.now()-this.messageUrisAt<this.resourceCacheTtlMs)return [...this.messageUris];
+      const generation=this.resourceGeneration;
       try{
-        do {const page=await client.listResources(cursor?{cursor}:undefined);resources.push(...page.resources);cursor=page.nextCursor;
-          if(cursor&&seen.has(cursor))throw new Error('Repeated resources cursor');if(cursor)seen.add(cursor);
-        }while(cursor);return resources;
+        const resources=await this.fetchResources(client,'change-or-ttl');
+        this.cacheMessageResources(resources,client,generation);
+        return resources.filter(resource=>resource.uri.startsWith('mid:')).map(resource=>resource.uri);
       }catch(error){this.observeSessionFailure(error,client);throw error;}
     });
   }
+  async listResources(){return this.enqueue(async()=>{
+    const client=this.requireClient();const generation=this.resourceGeneration;
+    try{const resources=await this.fetchResources(client,'explicit');this.cacheMessageResources(resources,client,generation);return resources;}
+    catch(error){this.observeSessionFailure(error,client);throw error;}
+  });}
   async listResourceTemplates(){return this.enqueue(async()=>{const client=this.requireClient();try{return await client.listResourceTemplates();}catch(error){this.observeSessionFailure(error,client);throw error;}});}
   async readResource(uri:string){return this.enqueue(async()=>{const client=this.requireClient();try{const result=await client.readResource({uri,_meta:{'reliefmesh/format':'json'}});this.activity('resources/read','success');return result;}catch(error){this.observeSessionFailure(error,client);throw error;}});}
   async subscribeResource(uri:string){await this.enqueue(async()=>{const client=this.requireClient();try{await client.subscribeResource({uri});}catch(error){this.observeSessionFailure(error,client);throw error;}});this.activity('resources/subscribe','success');}
